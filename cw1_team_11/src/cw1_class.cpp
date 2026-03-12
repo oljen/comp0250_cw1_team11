@@ -1,15 +1,41 @@
 /* feel free to change any part of this file, or delete this file. In general,
 you can do whatever you want with this template code, including deleting it all
-and starting from scratch. The only requirment is to make sure your entire 
+and starting from scratch. The only requirment is to make sure your entire
 solution is contained within the cw1_team_<your_team_number> package */
 
 #include <cw1_class.h>
 
 #include <functional>
 #include <memory>
+#include <string>
 #include <utility>
 
+#include <geometry_msgs/msg/pose_stamped.hpp>
+
+#include <moveit/move_group_interface/move_group_interface.h>
+#include <moveit/planning_scene_interface/planning_scene_interface.h>
+
 #include <rmw/qos_profiles.h>
+
+///////////////////////////////////////////////////////////////////////////////
+
+// Simple helper: create an end-effector pose at (x, y, z)
+// with a basic top-down orientation for the Panda.
+static geometry_msgs::msg::Pose make_pose(double x, double y, double z)
+{
+  geometry_msgs::msg::Pose p;
+  p.position.x = x;
+  p.position.y = y;
+  p.position.z = z;
+
+  // Basic downward-facing orientation
+  p.orientation.x = 1.0;
+  p.orientation.y = 0.0;
+  p.orientation.z = 0.0;
+  p.orientation.w = 0.0;
+
+  return p;
+}
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -127,27 +153,56 @@ cw1::t1_callback(
 {
   (void)response;
 
-  // 1. Read cube position (from the task request)
-  double cube_x = request->object_loc.pose.position.x;
-  double cube_y = request->object_loc.pose.position.y;
-  double cube_z = request->object_loc.pose.position.z;
+  // Read cube position from task request
+  const double cube_x = request->object_loc.pose.position.x;
+  const double cube_y = request->object_loc.pose.position.y;
+  const double cube_z = request->object_loc.pose.position.z;
 
-  // 2. Read basket position (from the task request)
-  double basket_x = request->goal_loc.point.x;
-  double basket_y = request->goal_loc.point.y;
-  double basket_z = request->goal_loc.point.z;
+  // Read basket position from task request
+  const double basket_x = request->goal_loc.point.x;
+  const double basket_y = request->goal_loc.point.y;
+  const double basket_z = request->goal_loc.point.z;
 
-  // 3. Print them (debugging / sanity check)
   RCLCPP_INFO(node_->get_logger(), "Task 1 started");
   RCLCPP_INFO(
     node_->get_logger(),
     "Cube position:   x=%.3f y=%.3f z=%.3f",
     cube_x, cube_y, cube_z);
-
   RCLCPP_INFO(
     node_->get_logger(),
     "Basket position: x=%.3f y=%.3f z=%.3f",
     basket_x, basket_y, basket_z);
+
+  // Create MoveIt interface for Panda arm
+  static const std::string planning_group = "panda_arm";
+  moveit::planning_interface::MoveGroupInterface move_group(node_, planning_group);
+
+  move_group.setPlanningTime(5.0);
+  move_group.setMaxVelocityScalingFactor(0.2);
+  move_group.setMaxAccelerationScalingFactor(0.2);
+
+  // First movement test: go to a hover pose above the cube
+  const double hover_z = cube_z + pick_offset_z_;
+  geometry_msgs::msg::Pose hover_pose = make_pose(cube_x, cube_y, hover_z);
+
+  move_group.setPoseTarget(hover_pose);
+
+  moveit::planning_interface::MoveGroupInterface::Plan plan;
+  bool success = (
+    move_group.plan(plan) == moveit::core::MoveItErrorCode::SUCCESS);
+
+  if (!success) {
+    RCLCPP_ERROR(node_->get_logger(), "Planning to hover pose failed");
+    return;
+  }
+
+  auto exec_result = move_group.execute(plan);
+  if (exec_result != moveit::core::MoveItErrorCode::SUCCESS) {
+    RCLCPP_ERROR(node_->get_logger(), "Execution to hover pose failed");
+    return;
+  }
+
+  RCLCPP_INFO(node_->get_logger(), "Moved to hover pose above cube");
 }
 
 ///////////////////////////////////////////////////////////////////////////////
