@@ -1,7 +1,20 @@
-/* feel free to change any part of this file, or delete this file. In general,
-you can do whatever you want with this template code, including deleting it all
-and starting from scratch. The only requirment is to make sure your entire
-solution is contained within the cw1_team_<your_team_number> package */
+/* COMP0250 Coursework 1 - Team 11
+ *
+ * Task 1: Pick and place at given positions using MoveIt.
+ * Tasks 2 & 3: Stubs (to be implemented).
+ *
+ * Key geometry notes:
+ *   - The panda_arm group plans for panda_link8 (the flange).
+ *   - From panda_link8 to the fingertip is ~0.105 m (hand + finger length).
+ *   - Cube: 0.04 m side, centroid at ~0.029 m above ground.
+ *   - Basket: 0.10 m side, centroid at ~0.020 m above ground, top at ~0.07 m.
+ *   - All positions from the service are in "panda_link0" frame (= world).
+ *
+ * Approach strategy:
+ *   1. Joint-space for large moves (fast, less precise)
+ *   2. Cartesian for alignment and vertical moves (precise)
+ *   3. Always return home on completion or failure (prevents jams)
+ */
 
 #include <cw1_class.h>
 
@@ -9,95 +22,204 @@ solution is contained within the cw1_team_<your_team_number> package */
 #include <memory>
 #include <string>
 #include <utility>
+#include <thread>
+#include <chrono>
+#include <vector>
 
 #include <geometry_msgs/msg/pose_stamped.hpp>
 
 #include <moveit/move_group_interface/move_group_interface.h>
 #include <moveit/planning_scene_interface/planning_scene_interface.h>
+#include <shape_msgs/msg/solid_primitive.hpp>
+#include <moveit_msgs/msg/collision_object.hpp>
 
 #include <rmw/qos_profiles.h>
 
 ///////////////////////////////////////////////////////////////////////////////
+// Constants
+///////////////////////////////////////////////////////////////////////////////
 
-// Simple helper: create an end-effector pose at (x, y, z)
-// with a basic top-down orientation for the Panda.
-static geometry_msgs::msg::Pose make_pose(double x, double y, double z)
+static constexpr double FINGER_TIP_OFFSET = 0.105;
+
+///////////////////////////////////////////////////////////////////////////////
+// Helpers
+///////////////////////////////////////////////////////////////////////////////
+
+static geometry_msgs::msg::Pose
+make_top_down_pose(double x, double y, double link8_z)
 {
   geometry_msgs::msg::Pose p;
   p.position.x = x;
   p.position.y = y;
-  p.position.z = z;
-
-  // Basic downward-facing orientation
+  p.position.z = link8_z;
   p.orientation.x = 1.0;
   p.orientation.y = 0.0;
   p.orientation.z = 0.0;
   p.orientation.w = 0.0;
-
   return p;
 }
 
+static inline double fingertip_to_link8(double fingertip_z)
+{
+  return fingertip_z + FINGER_TIP_OFFSET;
+}
+
+/** Joint-space planning with retries. */
+static bool move_to_pose(
+  moveit::planning_interface::MoveGroupInterface &mg,
+  const geometry_msgs::msg::Pose &target,
+  const rclcpp::Logger &logger,
+  const std::string &desc,
+  int max_attempts = 5)
+{
+  mg.setPoseTarget(target);
+  for (int a = 1; a <= max_attempts; ++a)
+  {
+    moveit::planning_interface::MoveGroupInterface::Plan plan;
+    if (mg.plan(plan) != moveit::core::MoveItErrorCode::SUCCESS) {
+      RCLCPP_WARN(logger, "%s: plan %d/%d failed", desc.c_str(), a, max_attempts);
+      continue;
+    }
+    if (mg.execute(plan) == moveit::core::MoveItErrorCode::SUCCESS) {
+      RCLCPP_INFO(logger, "%s: OK", desc.c_str());
+      return true;
+    }
+    RCLCPP_WARN(logger, "%s: exec %d/%d failed", desc.c_str(), a, max_attempts);
+  }
+  RCLCPP_ERROR(logger, "%s: FAILED", desc.c_str());
+  return false;
+}
+
+/** Cartesian straight-line with fallback to joint-space. */
+static bool cartesian_move(
+  moveit::planning_interface::MoveGroupInterface &mg,
+  const geometry_msgs::msg::Pose &target,
+  const rclcpp::Logger &logger,
+  const std::string &desc,
+  double eef_step = 0.005,
+  double jump_thresh = 0.0,
+  double min_fraction = 0.90)
+{
+  std::vector<geometry_msgs::msg::Pose> waypoints;
+  waypoints.push_back(target);
+
+  moveit_msgs::msg::RobotTrajectory traj;
+  double fraction = mg.computeCartesianPath(
+    waypoints, eef_step, jump_thresh, traj);
+
+  if (fraction >= min_fraction) {
+    if (mg.execute(traj) == moveit::core::MoveItErrorCode::SUCCESS) {
+      RCLCPP_INFO(logger, "%s: Cartesian OK (%.0f%%)",
+                  desc.c_str(), fraction * 100.0);
+      return true;
+    }
+    RCLCPP_WARN(logger, "%s: Cartesian exec failed, fallback to joint",
+                desc.c_str());
+  } else {
+    RCLCPP_WARN(logger, "%s: Cartesian %.0f%%, fallback to joint",
+                desc.c_str(), fraction * 100.0);
+  }
+  return move_to_pose(mg, target, logger, desc);
+}
+
+/** Move the gripper to a given total width. */
+static bool move_gripper(
+  const rclcpp::Node::SharedPtr &node,
+  double width,
+  const rclcpp::Logger &logger,
+  const std::string &desc)
+{
+  moveit::planning_interface::MoveGroupInterface hand(node, "hand");
+  hand.setJointValueTarget("panda_finger_joint1", width / 2.0);
+
+  moveit::planning_interface::MoveGroupInterface::Plan plan;
+  if (hand.plan(plan) != moveit::core::MoveItErrorCode::SUCCESS) {
+    RCLCPP_ERROR(logger, "%s: gripper plan failed", desc.c_str());
+    return false;
+  }
+  if (hand.execute(plan) != moveit::core::MoveItErrorCode::SUCCESS) {
+    RCLCPP_ERROR(logger, "%s: gripper exec failed", desc.c_str());
+    return false;
+  }
+  RCLCPP_INFO(logger, "%s: width=%.4f OK", desc.c_str(), width);
+  return true;
+}
+
+/**
+ * Move the arm to its named "ready" home position.
+ * This clears any stuck state and resets the arm to a known configuration.
+ * We try multiple times because the arm may be in a difficult configuration.
+ */
+static bool move_to_home(
+  moveit::planning_interface::MoveGroupInterface &mg,
+  const rclcpp::Logger &logger)
+{
+  mg.setNamedTarget("ready");
+  for (int a = 1; a <= 5; ++a) {
+    moveit::planning_interface::MoveGroupInterface::Plan plan;
+    if (mg.plan(plan) != moveit::core::MoveItErrorCode::SUCCESS) {
+      RCLCPP_WARN(logger, "Home: plan %d/5 failed", a);
+      continue;
+    }
+    if (mg.execute(plan) == moveit::core::MoveItErrorCode::SUCCESS) {
+      RCLCPP_INFO(logger, "Home: OK");
+      return true;
+    }
+    RCLCPP_WARN(logger, "Home: exec %d/5 failed", a);
+  }
+  RCLCPP_ERROR(logger, "Home: FAILED — arm may be stuck");
+  return false;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Constructor
 ///////////////////////////////////////////////////////////////////////////////
 
 cw1::cw1(const rclcpp::Node::SharedPtr &node)
 {
-  /* class constructor */
-
   node_ = node;
-  service_cb_group_ = node_->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
-  sensor_cb_group_ = node_->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+  service_cb_group_ = node_->create_callback_group(
+    rclcpp::CallbackGroupType::MutuallyExclusive);
+  sensor_cb_group_ = node_->create_callback_group(
+    rclcpp::CallbackGroupType::MutuallyExclusive);
 
-  // advertise solutions for coursework tasks
   t1_service_ = node_->create_service<cw1_world_spawner::srv::Task1Service>(
     "/task1_start",
-    std::bind(&cw1::t1_callback, this, std::placeholders::_1, std::placeholders::_2),
+    std::bind(&cw1::t1_callback, this,
+              std::placeholders::_1, std::placeholders::_2),
     rmw_qos_profile_services_default, service_cb_group_);
   t2_service_ = node_->create_service<cw1_world_spawner::srv::Task2Service>(
     "/task2_start",
-    std::bind(&cw1::t2_callback, this, std::placeholders::_1, std::placeholders::_2),
+    std::bind(&cw1::t2_callback, this,
+              std::placeholders::_1, std::placeholders::_2),
     rmw_qos_profile_services_default, service_cb_group_);
   t3_service_ = node_->create_service<cw1_world_spawner::srv::Task3Service>(
     "/task3_start",
-    std::bind(&cw1::t3_callback, this, std::placeholders::_1, std::placeholders::_2),
+    std::bind(&cw1::t3_callback, this,
+              std::placeholders::_1, std::placeholders::_2),
     rmw_qos_profile_services_default, service_cb_group_);
 
-  // Service and sensor callbacks use separate callback groups to align with the
-  // current runtime architecture used in cw1_team_0.
-  rclcpp::SubscriptionOptions joint_state_sub_options;
-  joint_state_sub_options.callback_group = sensor_cb_group_;
-  auto joint_state_qos = rclcpp::QoS(rclcpp::KeepLast(50));
-  joint_state_qos.reliable();
-  joint_state_qos.durability_volatile();
+  rclcpp::SubscriptionOptions js_opts;
+  js_opts.callback_group = sensor_cb_group_;
+  auto js_qos = rclcpp::QoS(rclcpp::KeepLast(50)).reliable();
   joint_state_sub_ = node_->create_subscription<sensor_msgs::msg::JointState>(
-    "/joint_states", joint_state_qos,
+    "/joint_states", js_qos,
     [this](const sensor_msgs::msg::JointState::ConstSharedPtr msg) {
-      const int64_t stamp_ns =
-        static_cast<int64_t>(msg->header.stamp.sec) * 1000000000LL +
-        static_cast<int64_t>(msg->header.stamp.nanosec);
-      latest_joint_state_stamp_ns_.store(stamp_ns, std::memory_order_relaxed);
+      (void)msg;
       joint_state_msg_count_.fetch_add(1, std::memory_order_relaxed);
-    },
-    joint_state_sub_options);
+    }, js_opts);
 
-  rclcpp::SubscriptionOptions cloud_sub_options;
-  cloud_sub_options.callback_group = sensor_cb_group_;
-  auto cloud_qos = rclcpp::QoS(rclcpp::KeepLast(10));
-  cloud_qos.reliable();
-  cloud_qos.durability_volatile();
+  rclcpp::SubscriptionOptions cl_opts;
+  cl_opts.callback_group = sensor_cb_group_;
+  auto cl_qos = rclcpp::QoS(rclcpp::KeepLast(10)).reliable();
   cloud_sub_ = node_->create_subscription<sensor_msgs::msg::PointCloud2>(
-    "/r200/camera/depth_registered/points", cloud_qos,
+    "/r200/camera/depth_registered/points", cl_qos,
     [this](const sensor_msgs::msg::PointCloud2::ConstSharedPtr msg) {
-      const int64_t stamp_ns =
-        static_cast<int64_t>(msg->header.stamp.sec) * 1000000000LL +
-        static_cast<int64_t>(msg->header.stamp.nanosec);
-      latest_cloud_stamp_ns_.store(stamp_ns, std::memory_order_relaxed);
+      (void)msg;
       cloud_msg_count_.fetch_add(1, std::memory_order_relaxed);
-    },
-    cloud_sub_options);
+    }, cl_opts);
 
-  // Parameter declarations intentionally mirror cw1_team_0 for compatibility.
-  const bool use_gazebo_gui = node_->declare_parameter<bool>("use_gazebo_gui", true);
-  (void)use_gazebo_gui;
+  node_->declare_parameter<bool>("use_gazebo_gui", true);
   enable_cloud_viewer_ = node_->declare_parameter<bool>("enable_cloud_viewer", false);
   move_home_on_start_ = node_->declare_parameter<bool>("move_home_on_start", false);
   use_path_constraints_ = node_->declare_parameter<bool>("use_path_constraints", false);
@@ -134,109 +256,166 @@ cw1::cw1(const rclcpp::Node::SharedPtr &node)
   joint_state_wait_timeout_sec_ = node_->declare_parameter<double>(
     "joint_state_wait_timeout_sec", joint_state_wait_timeout_sec_);
 
-  if (task2_capture_enabled_) {
-    RCLCPP_INFO(
-      node_->get_logger(),
-      "Template capture mode enabled, output dir: %s",
-      task2_capture_dir_.c_str());
-  }
-
-  RCLCPP_INFO(node_->get_logger(), "cw1 template class initialised with compatibility scaffold");
+  RCLCPP_INFO(node_->get_logger(), "cw1 class initialised");
 }
 
 ///////////////////////////////////////////////////////////////////////////////
+// Task 1: Pick and Place
+///////////////////////////////////////////////////////////////////////////////
 
-void
-cw1::t1_callback(
+void cw1::t1_callback(
   const std::shared_ptr<cw1_world_spawner::srv::Task1Service::Request> request,
   std::shared_ptr<cw1_world_spawner::srv::Task1Service::Response> response)
 {
   (void)response;
+  auto log = node_->get_logger();
 
-  // Read cube position from task request
-  const double cube_x = request->object_loc.pose.position.x;
-  const double cube_y = request->object_loc.pose.position.y;
-  const double cube_z = request->object_loc.pose.position.z;
+  // ── Read positions ──────────────────────────────────────────────────────
+  const double cx = request->object_loc.pose.position.x;
+  const double cy = request->object_loc.pose.position.y;
+  const double cz = request->object_loc.pose.position.z;
 
-  // Read basket position from task request
-  const double basket_x = request->goal_loc.point.x;
-  const double basket_y = request->goal_loc.point.y;
-  const double basket_z = request->goal_loc.point.z;
+  const double bx = request->goal_loc.point.x;
+  const double by = request->goal_loc.point.y;
+  const double bz = request->goal_loc.point.z;
 
-  RCLCPP_INFO(node_->get_logger(), "Task 1 started");
-  RCLCPP_INFO(
-    node_->get_logger(),
-    "Cube position:   x=%.3f y=%.3f z=%.3f",
-    cube_x, cube_y, cube_z);
-  RCLCPP_INFO(
-    node_->get_logger(),
-    "Basket position: x=%.3f y=%.3f z=%.3f",
-    basket_x, basket_y, basket_z);
+  RCLCPP_INFO(log, "=== Task 1 ===");
+  RCLCPP_INFO(log, "Cube:   (%.3f, %.3f, %.3f)", cx, cy, cz);
+  RCLCPP_INFO(log, "Basket: (%.3f, %.3f, %.3f)", bx, by, bz);
 
-  // Create MoveIt interface for Panda arm
-  static const std::string planning_group = "panda_arm";
-  moveit::planning_interface::MoveGroupInterface move_group(node_, planning_group);
+  // ── MoveIt setup ────────────────────────────────────────────────────────
+  moveit::planning_interface::MoveGroupInterface arm(node_, "panda_arm");
+  arm.setPlanningTime(10.0);
+  arm.setNumPlanningAttempts(10);
+  arm.setMaxVelocityScalingFactor(0.5);
+  arm.setMaxAccelerationScalingFactor(0.5);
+  arm.setGoalPositionTolerance(0.001);
+  arm.setGoalOrientationTolerance(0.01);
 
-  move_group.setPlanningTime(5.0);
-  move_group.setMaxVelocityScalingFactor(0.2);
-  move_group.setMaxAccelerationScalingFactor(0.2);
+  // ── Compute heights ─────────────────────────────────────────────────────
+  const double grasp_l8    = fingertip_to_link8(cz - 0.005);
+  const double hover_l8    = grasp_l8 + 0.08;
+  const double approach_l8 = 0.35;
+  const double transit_l8  = 0.40;
+  const double release_l8  = fingertip_to_link8(bz + 0.05 + 0.05);
 
-  // First movement test: go to a hover pose above the cube
-  const double hover_z = cube_z + pick_offset_z_;
-  geometry_msgs::msg::Pose hover_pose = make_pose(cube_x, cube_y, hover_z);
+  RCLCPP_INFO(log, "Heights: grasp=%.3f hover=%.3f approach=%.3f release=%.3f",
+              grasp_l8, hover_l8, approach_l8, release_l8);
 
-  move_group.setPoseTarget(hover_pose);
+  // ── Helper: go home and return (used on failure) ────────────────────────
+  // We use a lambda so any early return still resets the arm.
+  auto go_home_and_open = [&]() {
+    move_gripper(node_, 0.07, log, "Cleanup-Open gripper");
+    move_to_home(arm, log);
+  };
 
-  moveit::planning_interface::MoveGroupInterface::Plan plan;
-  bool success = (
-    move_group.plan(plan) == moveit::core::MoveItErrorCode::SUCCESS);
+  // ══════════════════════════════════════════════════════════════════════════
+  //  STEP 0: Start from home position for a clean known state
+  // ══════════════════════════════════════════════════════════════════════════
+  RCLCPP_INFO(log, "Moving to home position...");
+  move_to_home(arm, log);
 
-  if (!success) {
-    RCLCPP_ERROR(node_->get_logger(), "Planning to hover pose failed");
-    return;
+  // ══════════════════════════════════════════════════════════════════════════
+  //  PICK SEQUENCE
+  // ══════════════════════════════════════════════════════════════════════════
+
+  // 1. Open gripper
+  if (!move_gripper(node_, 0.07, log, "1-Open")) {
+    go_home_and_open(); return;
   }
 
-  auto exec_result = move_group.execute(plan);
-  if (exec_result != moveit::core::MoveItErrorCode::SUCCESS) {
-    RCLCPP_ERROR(node_->get_logger(), "Execution to hover pose failed");
-    return;
+  // 2. Joint-space to approach height above cube (fast, rough)
+  if (!move_to_pose(arm,
+      make_top_down_pose(cx, cy, approach_l8),
+      log, "2-Approach")) {
+    go_home_and_open(); return;
   }
 
-  RCLCPP_INFO(node_->get_logger(), "Moved to hover pose above cube");
+  // 3. Cartesian to precise hover directly above cube (corrects XY)
+  if (!cartesian_move(arm,
+      make_top_down_pose(cx, cy, hover_l8),
+      log, "3-Align")) {
+    go_home_and_open(); return;
+  }
+
+  // 4. Cartesian straight down to grasp (pure Z motion)
+  if (!cartesian_move(arm,
+      make_top_down_pose(cx, cy, grasp_l8),
+      log, "4-Descend")) {
+    go_home_and_open(); return;
+  }
+
+  // 5. Close gripper
+  if (!move_gripper(node_, gripper_grasp_width_, log, "5-Grasp")) {
+    go_home_and_open(); return;
+  }
+  std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+  // 6. Cartesian lift straight up (no lateral drift while holding cube)
+  if (!cartesian_move(arm,
+      make_top_down_pose(cx, cy, transit_l8),
+      log, "6-Lift")) {
+    go_home_and_open(); return;
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  PLACE SEQUENCE
+  // ══════════════════════════════════════════════════════════════════════════
+
+  // 7. Joint-space to above basket (large lateral move)
+  if (!move_to_pose(arm,
+      make_top_down_pose(bx, by, transit_l8),
+      log, "7-Above basket")) {
+    go_home_and_open(); return;
+  }
+
+  // 8. Cartesian lower to release height
+  if (!cartesian_move(arm,
+      make_top_down_pose(bx, by, release_l8),
+      log, "8-Lower")) {
+    go_home_and_open(); return;
+  }
+
+  // 9. Open gripper to release
+  if (!move_gripper(node_, 0.07, log, "9-Release")) {
+    go_home_and_open(); return;
+  }
+
+  // 10. Cartesian retreat upward
+  cartesian_move(arm,
+      make_top_down_pose(bx, by, transit_l8),
+      log, "10-Retreat");
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  ALWAYS return home at the end
+  // ══════════════════════════════════════════════════════════════════════════
+  move_to_home(arm, log);
+
+  RCLCPP_INFO(log, "=== Task 1 complete ===");
 }
 
 ///////////////////////////////////////////////////////////////////////////////
+// Task 2 (stub)
+///////////////////////////////////////////////////////////////////////////////
 
-void
-cw1::t2_callback(
+void cw1::t2_callback(
   const std::shared_ptr<cw1_world_spawner::srv::Task2Service::Request> request,
   std::shared_ptr<cw1_world_spawner::srv::Task2Service::Response> response)
 {
-  /* function which should solve task 2 */
-
   (void)request;
   (void)response;
-  RCLCPP_INFO_STREAM(
-    node_->get_logger(),
-    "Task 2 callback triggered (template stub). joint_msgs=" <<
-      joint_state_msg_count_.load(std::memory_order_relaxed) <<
-      ", cloud_msgs=" << cloud_msg_count_.load(std::memory_order_relaxed));
+  RCLCPP_INFO(node_->get_logger(), "Task 2 stub");
 }
 
 ///////////////////////////////////////////////////////////////////////////////
+// Task 3 (stub)
+///////////////////////////////////////////////////////////////////////////////
 
-void
-cw1::t3_callback(
+void cw1::t3_callback(
   const std::shared_ptr<cw1_world_spawner::srv::Task3Service::Request> request,
   std::shared_ptr<cw1_world_spawner::srv::Task3Service::Response> response)
 {
-  /* function which should solve task 3 */
-
   (void)request;
   (void)response;
-  RCLCPP_INFO_STREAM(
-    node_->get_logger(),
-    "Task 3 callback triggered (template stub). joint_msgs=" <<
-      joint_state_msg_count_.load(std::memory_order_relaxed) <<
-      ", cloud_msgs=" << cloud_msg_count_.load(std::memory_order_relaxed));
+  RCLCPP_INFO(node_->get_logger(), "Task 3 stub");
 }
