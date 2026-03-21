@@ -78,7 +78,7 @@ public:
   double place_offset_z_ = 0.35;
   double grasp_approach_offset_z_ = 0.015;
   double post_grasp_lift_z_ = 0.05;
-  double gripper_grasp_width_ = 0.03;
+  double gripper_grasp_width_ = 0.02;   // tighter grip (was 0.03)
   double joint_state_wait_timeout_sec_ = 2.0;
 
   std::string task2_capture_dir_ = "/tmp/cw1_task2_capture";
