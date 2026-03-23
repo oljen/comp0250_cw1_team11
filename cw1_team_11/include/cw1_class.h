@@ -17,9 +17,35 @@ solution is contained within the cw1_team_<your_team_number> package */
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 
+#include <pcl_conversions/pcl_conversions.h>
+#include <tf2/exceptions.h>
+#include <tf2/time.h>
+#include <tf2_ros/transform_listener.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+
+
+#include <pcl/common/centroid.h>
+#include <pcl/point_cloud.h>
+#include <pcl/point_types.h>
+#include <pcl/filters/voxel_grid.h>
+#include <pcl/filters/passthrough.h>
+#include <pcl/filters/statistical_outlier_removal.h>
+#include <pcl/filters/extract_indices.h>
+#include <pcl/features/normal_3d.h>
+#include <pcl/ModelCoefficients.h>
+#include <pcl/sample_consensus/method_types.h>
+#include <pcl/sample_consensus/model_types.h>
+#include <pcl/search/kdtree.h>
+#include <pcl/segmentation/sac_segmentation.h>
+#include <pcl/segmentation/extract_clusters.h>
+
 #include "cw1_world_spawner/srv/task1_service.hpp"
 #include "cw1_world_spawner/srv/task2_service.hpp"
 #include "cw1_world_spawner/srv/task3_service.hpp"
+
+typedef pcl::PointXYZRGBA PointT;
+typedef pcl::PointCloud<PointT> PointC;
+typedef PointC::Ptr PointCPtr;
 
 class cw1
 {
@@ -41,7 +67,17 @@ public:
     const std::shared_ptr<cw1_world_spawner::srv::Task3Service::Request> request,
     std::shared_ptr<cw1_world_spawner::srv::Task3Service::Response> response);
 
-  /* ----- class member variables ----- */
+    // Add these to the public section of cw1 in the .h:
+  void rosTopicToCloud(const sensor_msgs::msg::PointCloud2::SharedPtr cloud_input_msg);
+  void applyVoxelGrid(double leaf_size);
+  void applyPassthrough(double pass_min, double pass_max, std::string pass_axis);
+  void applyOutlierRemoval(int mean_k, double stddev);
+  void findNormals(int normal_k);
+  void segmentPlane(double normal_dist_weight, int max_iterations, double distance);
+  void extractEuclideanClusters(double cluster_tolerance, int min_size, int max_size);
+  void pubFilteredPCMsg(
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr &pc_pub, PointC &pc);
+    /* ----- class member variables ----- */
 
   rclcpp::Node::SharedPtr node_;
   rclcpp::Service<cw1_world_spawner::srv::Task1Service>::SharedPtr t1_service_;
@@ -51,6 +87,38 @@ public:
   rclcpp::CallbackGroup::SharedPtr sensor_cb_group_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_state_sub_;
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr cloud_sub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr g_pub_cloud;
+
+  
+  sensor_msgs::msg::PointCloud2::SharedPtr latest_cloud_msg_;
+
+  PointCPtr g_cloud_ptr;
+  PointCPtr g_cloud_filtered;
+  PointCPtr g_cloud_plane;
+  PointCPtr g_cloud_segmented_plane;
+  PointCPtr g_cloud_cluster;
+
+  std::string g_input_pc_frame_id;
+
+  pcl::VoxelGrid<PointT> g_vx;
+  pcl::PassThrough<PointT> g_pt;
+  pcl::StatisticalOutlierRemoval<PointT> g_sor;
+
+  pcl::search::KdTree<PointT>::Ptr g_tree_ptr;
+  pcl::search::KdTree<PointT>::Ptr g_tree_ptr_euclidean;
+  pcl::NormalEstimation<PointT, pcl::Normal> g_ne;
+  pcl::PointCloud<pcl::Normal>::Ptr g_cloud_normals;
+  pcl::PointCloud<pcl::Normal>::Ptr g_cloud_segmented_normals;
+
+  pcl::SACSegmentationFromNormals<PointT, pcl::Normal> g_seg;
+  pcl::ExtractIndices<PointT> g_extract_pc;
+  pcl::ExtractIndices<pcl::Normal> g_extract_normals;
+  pcl::EuclideanClusterExtraction<PointT> g_extract_euclidean;
+
+  pcl::PointIndices::Ptr g_inliers_plane;
+  pcl::ModelCoefficients::Ptr g_coeff_plane;
+
+  std::shared_ptr<tf2_ros::TransformListener> g_tf_listener;
 
   // Sensor callback state bookkeeping for template diagnostics.
   std::atomic<int64_t> latest_joint_state_stamp_ns_{0};

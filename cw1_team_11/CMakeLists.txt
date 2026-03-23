@@ -65,7 +65,6 @@ target_link_libraries(${PROJECT_NAME}_cw1_class_lib
 )
 
 add_executable(cw1_solution_node src/cw1_node.cpp)
-add_executable(cw1_pcl src/cw1_pcl_utils.cpp)
 
 ament_target_dependencies(cw1_solution_node 
   rclcpp
@@ -83,29 +82,11 @@ ament_target_dependencies(cw1_solution_node
   cw1_world_spawner
 )
 
-ament_target_dependencies(cw1_pcl 
-  rclcpp
-  std_msgs
-  geometry_msgs
-  sensor_msgs
-  moveit_core
-  moveit_msgs
-  moveit_ros_planning_interface
-  tf2
-  tf2_geometry_msgs
-  pcl_ros
-  pcl_conversions
-  shape_msgs
-  cw1_world_spawner
-)
 
 target_link_libraries(cw1_solution_node
   ${PROJECT_NAME}_cw1_class_lib
 )
 
-target_link_libraries(cw1_pcl
-  ${PROJECT_NAME}_cw1_class_lib
-)
 
 rosidl_get_typesupport_target(cw1_team_x_typesupport_target
   ${PROJECT_NAME} "rosidl_typesupport_cpp")
@@ -117,7 +98,6 @@ target_link_libraries(cw1_solution_node
 install(TARGETS
   ${PROJECT_NAME}_cw1_class_lib
   cw1_solution_node
-  cw1_pcl
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}

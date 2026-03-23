@@ -12,6 +12,7 @@ solution is contained within the cw1_team_<your_team_number> package */
 
 #include <geometry_msgs/msg/pose_stamped.hpp>
 
+
 #include <moveit/move_group_interface/move_group_interface.h>
 #include <moveit/planning_scene_interface/planning_scene_interface.h>
 
@@ -37,6 +38,7 @@ static geometry_msgs::msg::Pose make_pose(double x, double y, double z)
   return p;
 }
 
+
 ///////////////////////////////////////////////////////////////////////////////
 
 cw1::cw1(const rclcpp::Node::SharedPtr &node)
@@ -46,6 +48,13 @@ cw1::cw1(const rclcpp::Node::SharedPtr &node)
   node_ = node;
   service_cb_group_ = node_->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
   sensor_cb_group_ = node_->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+
+  g_cloud_ptr = std::make_shared<PointC>();
+  g_cloud_filtered = std::make_shared<PointC>();
+  g_cloud_plane = std::make_shared<PointC>();
+  g_cloud_segmented_plane = std::make_shared<PointC>();
+  g_cloud_cluster = std::make_shared<PointC>();
+
 
   // advertise solutions for coursework tasks
   t1_service_ = node_->create_service<cw1_world_spawner::srv::Task1Service>(
@@ -60,6 +69,8 @@ cw1::cw1(const rclcpp::Node::SharedPtr &node)
     "/task3_start",
     std::bind(&cw1::t3_callback, this, std::placeholders::_1, std::placeholders::_2),
     rmw_qos_profile_services_default, service_cb_group_);
+
+  g_pub_cloud = node_->create_publisher<sensor_msgs::msg::PointCloud2>("/pcl_tutorial/filtered", 1);
 
   // Service and sensor callbacks use separate callback groups to align with the
   // current runtime architecture used in cw1_team_0.
@@ -87,6 +98,7 @@ cw1::cw1(const rclcpp::Node::SharedPtr &node)
   cloud_sub_ = node_->create_subscription<sensor_msgs::msg::PointCloud2>(
     "/r200/camera/depth_registered/points", cloud_qos,
     [this](const sensor_msgs::msg::PointCloud2::ConstSharedPtr msg) {
+      latest_cloud_msg_ = std::make_shared<sensor_msgs::msg::PointCloud2>(*msg);
       const int64_t stamp_ns =
         static_cast<int64_t>(msg->header.stamp.sec) * 1000000000LL +
         static_cast<int64_t>(msg->header.stamp.nanosec);
@@ -249,6 +261,20 @@ cw1::t2_callback(
     RCLCPP_ERROR(node_->get_logger(), "Execution to hover pose failed");
     return;
   }
+
+
+  if (latest_cloud_msg_) {
+      rosTopicToCloud(latest_cloud_msg_);
+  } else {
+      RCLCPP_WARN(node_->get_logger(), "No point cloud message received yet.");
+  }  applyVoxelGrid(0.01);
+  applyPassthrough(0.0, 0.7, "x");
+  applyOutlierRemoval(20, 1.00);
+  findNormals(50);
+  segmentPlane(0.1, 100, 0.03);
+  extractEuclideanClusters(0.02, 100, 25000);
+
+
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -268,3 +294,159 @@ cw1::t3_callback(
       joint_state_msg_count_.load(std::memory_order_relaxed) <<
       ", cloud_msgs=" << cloud_msg_count_.load(std::memory_order_relaxed));
 }
+
+
+void cw1::rosTopicToCloud(const sensor_msgs::msg::PointCloud2::SharedPtr cloud_input_msg)
+{
+  g_input_pc_frame_id = cloud_input_msg->header.frame_id;
+
+  pcl::fromROSMsg(*cloud_input_msg, *g_cloud_ptr);
+
+  *g_cloud_filtered = *g_cloud_ptr;
+
+}
+
+
+void cw1::applyVoxelGrid(double g_leaf_size)
+{
+  
+  PointCPtr output_cloud(new PointC);
+
+  g_vx.setInputCloud(g_cloud_filtered);
+  g_vx.setLeafSize(g_leaf_size, g_leaf_size, g_leaf_size);
+  g_vx.filter(*output_cloud);
+
+  g_cloud_filtered.swap(output_cloud);
+
+}
+
+void cw1::applyPassthrough(double g_pass_min, double g_pass_max, std::string g_pass_axis)
+{
+  
+  PointCPtr output_cloud(new PointC);
+
+  g_pt.setInputCloud(g_cloud_filtered);
+  g_pt.setFilterFieldName(g_pass_axis);
+  g_pt.setFilterLimits(g_pass_min, g_pass_max);
+  g_pt.filter(*output_cloud);
+  g_cloud_filtered.swap(output_cloud);
+}
+
+void cw1::applyOutlierRemoval(int g_outlier_mean_k, double g_outlier_stddev)
+{
+  
+  PointCPtr output_cloud(new PointC);
+
+  g_sor.setInputCloud(g_cloud_filtered);
+  g_sor.setMeanK(g_outlier_mean_k);
+  g_sor.setStddevMulThresh(g_outlier_stddev);
+  g_sor.filter(*output_cloud);
+  g_cloud_filtered.swap(output_cloud);
+
+}
+
+void cw1::findNormals(int g_normal_k)
+{
+  g_ne.setInputCloud(g_cloud_filtered);
+  g_ne.setSearchMethod(g_tree_ptr);
+  g_ne.setKSearch(g_normal_k);
+  g_ne.compute(*g_cloud_normals);
+}
+
+void cw1::segmentPlane(double g_plane_normal_dist_weight, int g_plane_max_iterations, double g_plane_distance)
+{
+  // TODO(student-9): Implement normal-plane segmentation.
+
+  //Configure model
+  g_seg.setOptimizeCoefficients(true);
+  g_seg.setModelType(pcl::SACMODEL_NORMAL_PLANE);
+  g_seg.setNormalDistanceWeight(g_plane_normal_dist_weight);
+  g_seg.setMethodType(pcl::SAC_RANSAC);
+  g_seg.setMaxIterations(g_plane_max_iterations);
+  g_seg.setDistanceThreshold(g_plane_distance);
+
+  //Set cloud to segment
+  g_seg.setInputCloud(g_cloud_filtered);
+  g_seg.setInputNormals(g_cloud_normals);
+
+  //segment
+  g_seg.segment(*g_inliers_plane, *g_coeff_plane);
+
+  //extract point cloud that is the plane with inliers
+  g_extract_pc.setInputCloud(g_cloud_filtered);
+  g_extract_pc.setIndices(g_inliers_plane);
+  g_extract_pc.setNegative(false);
+  g_extract_pc.filter(*g_cloud_plane);
+
+  //extract point cloud that is NOT the plane (outliers). Store in filtered 2
+  g_extract_pc.setNegative(true);
+  g_extract_pc.filter(*g_cloud_segmented_plane);
+
+  //remove normals from the normal cloud that are in the plane
+  //normals2 is just normals of non-plane items
+  g_extract_normals.setNegative(true);
+  g_extract_normals.setInputCloud(g_cloud_normals);
+  g_extract_normals.setIndices(g_inliers_plane);
+  g_extract_normals.filter(*g_cloud_segmented_normals);
+}
+
+
+void cw1::extractEuclideanClusters(double clusterTolerance, int minClusterSize, int maxClusterSize)
+{
+  g_tree_ptr_euclidean->setInputCloud(g_cloud_segmented_plane);
+  //Configure clustering
+  std::vector<pcl::PointIndices> cluster_indices;
+  g_extract_euclidean.setClusterTolerance(clusterTolerance); // 2cm
+  g_extract_euclidean.setMinClusterSize(minClusterSize);
+  g_extract_euclidean.setMaxClusterSize(maxClusterSize);
+  g_extract_euclidean.setSearchMethod(g_tree_ptr_euclidean);
+  g_extract_euclidean.setInputCloud(g_cloud_segmented_plane);
+
+  //Extract clusters
+  g_extract_euclidean.extract(cluster_indices);
+  
+
+  std::size_t largest_size;
+
+  for (const auto& cluster : cluster_indices)
+  {
+    PointCPtr cloud_cluster(new PointC);
+    for (const auto& idx : cluster.indices) {
+      cloud_cluster->push_back((*g_cloud_segmented_plane)[idx]);
+    }
+    cloud_cluster->width = cloud_cluster->size();
+    cloud_cluster->height = 1;
+    cloud_cluster->is_dense = true;
+
+    if (cloud_cluster->size() > largest_size)
+    {
+      largest_size = cloud_cluster->size();
+      g_cloud_cluster = cloud_cluster;
+    }
+  }
+}
+
+void cw1::pubFilteredPCMsg(
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr &pc_pub,
+    PointC &pc)
+{
+  
+  std_msgs::msg::Header header;
+  header.frame_id = g_input_pc_frame_id;
+  header.stamp = node_->get_clock()->now();
+
+  // publish type
+  sensor_msgs::msg::PointCloud2 output;
+
+  //pass input cloud, output PointCloud2 by reference
+  pcl::toROSMsg(pc, output);
+  output.header = header;
+  pc_pub->publish(output);
+
+}
+
+  
+
+
+
+
