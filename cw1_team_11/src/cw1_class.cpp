@@ -218,6 +218,13 @@ cw1::cw1(const rclcpp::Node::SharedPtr &node)
 
 
 
+  g_cloud_ptr = std::make_shared<PointC>();
+  g_cloud_filtered = std::make_shared<PointC>();
+  g_cloud_plane = std::make_shared<PointC>();
+  g_cloud_segmented_plane = std::make_shared<PointC>();
+  g_cloud_cluster = std::make_shared<PointC>();
+
+
   // advertise solutions for coursework tasks
   t1_service_ = node_->create_service<cw1_world_spawner::srv::Task1Service>(
     "/task1_start", std::bind(&cw1::t1_callback, this, std::placeholders::_1, std::placeholders::_2),
