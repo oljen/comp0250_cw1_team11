@@ -274,6 +274,8 @@ cw1::t2_callback(
   segmentPlane(0.1, 100, 0.03);
   extractEuclideanClusters(0.02, 100, 25000);
 
+  pubFilteredPCMsg(g_pub_cloud, *g_cloud_cluster);
+
 
 }
 
