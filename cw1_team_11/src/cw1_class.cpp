@@ -221,6 +221,34 @@ cw1::t2_callback(
     "Task 2 callback triggered (template stub). joint_msgs=" <<
       joint_state_msg_count_.load(std::memory_order_relaxed) <<
       ", cloud_msgs=" << cloud_msg_count_.load(std::memory_order_relaxed));
+
+  static const std::string planning_group = "panda_arm";
+  moveit::planning_interface::MoveGroupInterface move_group2(node_, planning_group);
+
+  move_group2.setPlanningTime(5.0);
+  move_group2.setMaxVelocityScalingFactor(0.2);
+  move_group2.setMaxAccelerationScalingFactor(0.2);
+  // First movement test: go to a hover pose above the cube
+  geometry_msgs::msg::Pose current_pose = move_group2.getCurrentPose().pose;
+
+  geometry_msgs::msg::Pose target_pose = current_pose;
+  target_pose.position.z += 0.30; // Raise by 10cm
+
+  move_group2.setPoseTarget(target_pose);
+
+  moveit::planning_interface::MoveGroupInterface::Plan plan2;
+  bool success = (
+  move_group2.plan(plan2) == moveit::core::MoveItErrorCode::SUCCESS);
+  if (!success) {
+    RCLCPP_ERROR(node_->get_logger(), "Planning to hover pose failed");
+    return;
+  }
+
+  auto exec_result2 = move_group2.execute(plan2);
+  if (exec_result2 != moveit::core::MoveItErrorCode::SUCCESS) {
+    RCLCPP_ERROR(node_->get_logger(), "Execution to hover pose failed");
+    return;
+  }
 }
 
 ///////////////////////////////////////////////////////////////////////////////
