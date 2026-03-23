@@ -500,6 +500,8 @@ void cw1::t2_callback(
   //The max distance away our cluster should be from the input pose
   float basket_distance_threshold = 0.1; 
 
+  pubFilteredPCMsg(g_pub_cloud, *g_cloud_cluster);
+
 
 
   //go through each cloud, find if its close to a provided coordinate
