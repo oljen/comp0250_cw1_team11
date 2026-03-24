@@ -230,6 +230,48 @@ cw1::cw1(const rclcpp::Node::SharedPtr &node)
   g_inliers_plane = std::make_shared<pcl::PointIndices>();
   g_coeff_plane = std::make_shared<pcl::ModelCoefficients>();
 
+  // ── PCL filter parameters ──────────────────────────────────────────
+  pcl_voxel_leaf_size_      = node_->declare_parameter("pcl.voxel_leaf_size",      pcl_voxel_leaf_size_);
+  pcl_pass_min_             = node_->declare_parameter("pcl.pass_min",             pcl_pass_min_);
+  pcl_pass_max_             = node_->declare_parameter("pcl.pass_max",             pcl_pass_max_);
+  pcl_pass_axis_            = node_->declare_parameter("pcl.pass_axis",            pcl_pass_axis_);
+  pcl_outlier_mean_k_       = node_->declare_parameter("pcl.outlier_mean_k",       pcl_outlier_mean_k_);
+  pcl_outlier_stddev_       = node_->declare_parameter("pcl.outlier_stddev",       pcl_outlier_stddev_);
+  pcl_normal_k_             = node_->declare_parameter("pcl.normal_k",             pcl_normal_k_);
+  pcl_plane_normal_weight_  = node_->declare_parameter("pcl.plane_normal_weight",  pcl_plane_normal_weight_);
+  pcl_plane_max_iterations_ = node_->declare_parameter("pcl.plane_max_iterations", pcl_plane_max_iterations_);
+  pcl_plane_distance_       = node_->declare_parameter("pcl.plane_distance",       pcl_plane_distance_);
+  pcl_cluster_tolerance_    = node_->declare_parameter("pcl.cluster_tolerance",    pcl_cluster_tolerance_);
+  pcl_cluster_min_size_     = node_->declare_parameter("pcl.cluster_min_size",     pcl_cluster_min_size_);
+  pcl_cluster_max_size_     = node_->declare_parameter("pcl.cluster_max_size",     pcl_cluster_max_size_);
+
+  // ── Live-update callback ───────────────────────────────────────────
+  node_->add_on_set_parameters_callback(
+    [this](const std::vector<rclcpp::Parameter> &params)
+    {
+      for (const auto &p : params) {
+        const auto &n = p.get_name();
+        if      (n == "pcl.voxel_leaf_size")      pcl_voxel_leaf_size_      = p.as_double();
+        else if (n == "pcl.pass_min")             pcl_pass_min_             = p.as_double();
+        else if (n == "pcl.pass_max")             pcl_pass_max_             = p.as_double();
+        else if (n == "pcl.pass_axis")            pcl_pass_axis_            = p.as_string();
+        else if (n == "pcl.outlier_mean_k")       pcl_outlier_mean_k_       = static_cast<int>(p.as_int());
+        else if (n == "pcl.outlier_stddev")       pcl_outlier_stddev_       = p.as_double();
+        else if (n == "pcl.normal_k")             pcl_normal_k_             = static_cast<int>(p.as_int());
+        else if (n == "pcl.plane_normal_weight")  pcl_plane_normal_weight_  = p.as_double();
+        else if (n == "pcl.plane_max_iterations") pcl_plane_max_iterations_ = static_cast<int>(p.as_int());
+        else if (n == "pcl.plane_distance")       pcl_plane_distance_       = p.as_double();
+        else if (n == "pcl.cluster_tolerance")    pcl_cluster_tolerance_    = p.as_double();
+        else if (n == "pcl.cluster_min_size")     pcl_cluster_min_size_     = static_cast<int>(p.as_int());
+        else if (n == "pcl.cluster_max_size")     pcl_cluster_max_size_     = static_cast<int>(p.as_int());
+      }
+      rcl_interfaces::msg::SetParametersResult result;
+      result.successful = true;
+
+      processCloud();
+      return result;
+    });
+
 
 
   // advertise solutions for coursework tasks
@@ -254,10 +296,10 @@ cw1::cw1(const rclcpp::Node::SharedPtr &node)
   g_pub_cluster5 = node_->create_publisher<sensor_msgs::msg::PointCloud2>("/cw1_cloud/cloud_cluster5", 1);
   g_pub_cluster6 = node_->create_publisher<sensor_msgs::msg::PointCloud2>("/cw1_cloud/cloud_cluster6", 1);
 
-  g_pub_clusters = {g_pub_cluster1, g_pub_cluster2, g_pub_cluster3, g_pub_cluster4, g_pub_cluster5, g_pub_cluster6};
+  g_pub_clusters = [g_pub_cluster1, g_pub_cluster2, g_pub_cluster3, g_pub_cluster4, g_pub_cluster5, g_pub_cluster6];
 
-  tf_buffer_   = std::make_shared<tf2_ros::Buffer>(node_->get_clock());
-  tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+  
+
 
   // Service and sensor callbacks use separate callback groups to align with the
   // current runtime architecture used in cw1_team_0.
@@ -446,112 +488,46 @@ void cw1::t2_callback(
   //   // return;
   // }
 
-  // auto exec_result2 = move_group2.execute(plan2);
-  // if (exec_result2 != moveit::core::MoveItErrorCode::SUCCESS) {
-  //   RCLCPP_ERROR(node_->get_logger(), "Execution to hover pose failed");
-  //   // return;
-  // }
-
-  
-
-  RCLCPP_INFO(node_->get_logger(), "T2: Start Sleep");
-  // 1 second sleep
-  std::this_thread::sleep_for(std::chrono::milliseconds(3000));
-
-  RCLCPP_INFO(node_->get_logger(), "T2: End Sleep");
-
-  //Save cloud, run filters, remove plane
-  segmentPlane();
-
-  //Get point clouds of the basket, store coordinates and colors of those clouds
-  std::vector<PointCPtr> baskets = getBasketClouds();
-  std::vector<Eigen::Vector3f> coords;
-  std::vector<std::string> colors;
-
-  for (size_t i = 0; i < baskets.size(); i++)
-  {
-    //need to store local coordinate points in the world frame
-    coords.push_back(toWorldFrame(getCentroid(*baskets[i])));
-    colors.push_back(colorOfPointCloud(*baskets[i], 0.35));
-
-    RCLCPP_INFO(node_->get_logger(), "Centroid %zu is %s: x=%.3f y=%.3f z=%.3f", i, colors[i].c_str(), coords[i].x(), coords[i].y(), coords[i].z());
-
+  auto exec_result2 = move_group2.execute(plan2);
+  if (exec_result2 != moveit::core::MoveItErrorCode::SUCCESS) {
+    RCLCPP_ERROR(node_->get_logger(), "Execution to hover pose failed");
+    // return;
   }
 
-  //Reset the response size to the input vector
-  response->basket_colours.resize(request->basket_locs.size());
-  //populate the result with dummy data - no match
-  for (size_t i = 0; i < response->basket_colours.size(); i++)
-  {
-    response->basket_colours[i] = no_color;
-  }
+  processCloud();
 
+  // if (latest_cloud_msg_) {
 
-  //Debug check statements
+  //     std_msgs::msg::Header header;
+  //     header.frame_id = "color";
+  //     header.stamp = latest_cloud_msg_->header.stamp;
 
-  RCLCPP_INFO(node_->get_logger(), "coords: %zu, colors: %zu, basket_locs: %zu, basket_colours: %zu",
-            coords.size(), colors.size(), request->basket_locs.size(), response->basket_colours.size());
-
-  if (coords.size() != colors.size()) {
-      RCLCPP_ERROR(node_->get_logger(), "coords and colors size mismatch!");
-      return;
-  }
-  if (response->basket_colours.size() < request->basket_locs.size()) {
-      RCLCPP_ERROR(node_->get_logger(), "basket_colours vector too small!");
-      return;
-  }
-
-  RCLCPP_INFO(node_->get_logger(), "T2: Populated coords and colors");
-  
-
-  //The max distance away our cluster should be from the input pose
-  float basket_distance_threshold = 0.1; 
+  //     RCLCPP_INFO_STREAM(node_->get_logger(), "creating cloud");
+  //     rosTopicToCloud(latest_cloud_msg_);
+  //     pubFilteredPCMsg(g_pub_cloud, *g_cloud_filtered, header);
+  //     applyPassthrough(pcl_pass_min_, pcl_pass_max_, pcl_pass_axis_);
+  //     pubFilteredPCMsg(g_pub_passthrough, *g_cloud_filtered, header);
+  //     applyOutlierRemoval(pcl_outlier_mean_k_, pcl_outlier_stddev_);
+  //     pubFilteredPCMsg(g_pub_outlier, *g_cloud_filtered, header);
+  //     findNormals(pcl_normal_k_);
+  //     segmentPlane(pcl_plane_normal_weight_, pcl_plane_max_iterations_, pcl_plane_distance_);
+  //     pubFilteredPCMsg(g_pub_plane, *g_cloud_segmented_plane, header);
+  //     extractEuclideanClusters(pcl_cluster_tolerance_, pcl_cluster_min_size_, pcl_cluster_max_size_);
+      
 
 
 
+      
 
-  //go through each cloud, find if its close to a provided coordinate
-  for (size_t i = 0; i < coords.size(); i++)
-  {
 
-    for (size_t j = 0; j < request->basket_locs.size(); j++)
-    {
 
-      const auto& basket_loc = request->basket_locs[j];
-      //Assume all boxes are on platform, so we don't need to worry about a z discrepancy
-      float dist = std::hypot(coords[i].x() - basket_loc.point.x, coords[i].y() - basket_loc.point.y);
-      RCLCPP_INFO(node_->get_logger(), "T2: compared %zu with %zu, recorded %f", i, j, dist);
+  // } else {
+  //     RCLCPP_WARN(node_->get_logger(), "No point cloud message received yet.");
+  // }  
 
-      //we're in range!
-      if (dist < basket_distance_threshold)
-      {
-        //this coord is close to this cloud! Set that coord as the cloud color
-        response->basket_colours[j] = colors[i];
 
-        //RCLCPP_INFO(node_->get_logger(), "Matched cluster %zu with object %zu as %s", i, j, colors[i].c_str());
-        
-      }
-    }
 
-  }
-
-  //debug statements
-  for (size_t i = 0; i < request->basket_locs.size(); i++)
-  {
-    
-    RCLCPP_INFO(node_->get_logger(), "Basket %zu is: x=%.3f y=%.3f z=%.3f", i, request->basket_locs[i].point.x, request->basket_locs[i].point.y, request->basket_locs[i].point.z);
-
-  }
-
-  for (size_t i = 0; i < response->basket_colours.size(); i++)
-  {
-    
-    RCLCPP_INFO(node_->get_logger(), "Basket %zu is %s", i, response->basket_colours[i].c_str());
-
-  }
-  RCLCPP_INFO(node_->get_logger(), "T2: exiting cloud check");    
 }
-
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -824,7 +800,9 @@ std::vector<PointCPtr> cw1::extractEuclideanClusters(double clusterTolerance, in
   
   int num_cluster = 0;
 
-  std::vector<PointCPtr> all_clouds;
+  std::size_t largest_size = 0;
+
+  int num_cluster = 0;
 
   for (const auto& cluster : cluster_indices)
   {
@@ -836,40 +814,42 @@ std::vector<PointCPtr> cw1::extractEuclideanClusters(double clusterTolerance, in
     cloud_cluster->height = 1;
     cloud_cluster->is_dense = true;
 
-
-    if (cloud_cluster->size() == 0)
-    {
-      continue;
-    }
-
-    if (num_cluster < 6)
-    {
-    
-    // For testing only
     std_msgs::msg::Header header;
     header.frame_id = "color";
     header.stamp = latest_cloud_msg_->header.stamp;
-    pubFilteredPCMsg(g_pub_clusters[num_cluster], *cloud_cluster, header);
 
+
+    pubFilteredPCMsg(pub_clusters[num_cluster], *cloud_cluster, header);
+
+    if (cloud_cluster->size() > largest_size)
+    {
+      largest_size = cloud_cluster->size();
+      g_cloud_cluster = cloud_cluster;
     }
-    //for testing only
 
+    Eigen::Vector3f c = getCentroid(cloud_cluster);
+
+    RCLCPP_INFO(node_->get_logger(), "Centroid %d: x=%.3f y=%.3f z=%.3f", num_cluster, c.x(), c.y(), c.z());
+    
     num_cluster = num_cluster + 1;
 
+    if (num_cluster >= 6)
+    {
+      break;
+    }
 
-    
-    all_clouds.push_back(cloud_cluster);
   }
-  
-  return all_clouds;
-
 }
 
 Eigen::Vector3f cw1::getCentroid(PointC &in_cloud_ptr)
 {
-  
+  if (in_cloud_ptr->empty()) {
+    RCLCPP_WARN(node_->get_logger(), "getCentroid: empty cloud");
+    return Eigen::Vector3f::Zero();
+  }
+
   Eigen::Vector4f centroid;
-  pcl::compute3DCentroid(in_cloud_ptr, centroid);
+  pcl::compute3DCentroid(*in_cloud_ptr, centroid);
 
   return centroid.head<3>();  // drops the homogeneous w component
 }
@@ -902,6 +882,7 @@ void cw1::processCloud()
   header.frame_id = "color";
   header.stamp = latest_cloud_msg_->header.stamp;
 
+  RCLCPP_INFO_STREAM(node_->get_logger(), "creating cloud");
   rosTopicToCloud(latest_cloud_msg_);
   pubFilteredPCMsg(g_pub_cloud, *g_cloud_filtered, header);
   applyPassthrough(pcl_pass_min_, pcl_pass_max_, pcl_pass_axis_);
@@ -915,134 +896,8 @@ void cw1::processCloud()
 
 }
 
-std::string cw1::colorOfPointCloud(PointC &in_cloud_ptr, float threshold)
-{
-
-  float r = 0;
-  float g = 0;
-  float b = 0;
-
-  //average all point colors in the cloud
-
-  for (const auto & pt : in_cloud_ptr.points)
-  {
-    r = r + (pt.r / 255.0);
-    g = g + (pt.g / 255.0);
-    b = b + (pt.b / 255.0);
-  }
-
-
-  r = r / in_cloud_ptr.size();
-  g = g / in_cloud_ptr.size();
-  b = b / in_cloud_ptr.size();
-
-
-  float min_dist = 1000;
-  int min_color_idx;
-
-  RCLCPP_INFO(node_->get_logger(), "num_pts = %d, r=%.3f g=%.3f b=%.3f", static_cast<int>(in_cloud_ptr.size()), r, g, b);
-
-
-  // find closest color
-  for (size_t i = 0; i < num_colors; i++)
-  {
-
-    std::array<float, 3> color = colors[i];
-    //distance between average and saved color
-    float dist = std::sqrt(std::pow(r - color[0], 2) + std::pow(g - color[1], 2) + std::pow(b - color[2], 2));
-
-
-    if (dist < min_dist)
-    {
-      min_dist = dist;
-      min_color_idx = i;
-    }
-
-  }
-  //check to see if closest color is in range
-  if (min_dist < threshold)
-  {
-    return color_names[min_color_idx];
-  }
-  else
-  {
-    return no_color;
-  }
-
-}
-
-void cw1::segmentPlane()
-{
-  rosTopicToCloud(latest_cloud_msg_);
-  // applyVoxelGrid(0.05);
-  applyPassthrough(-0.3, 0.18, "y");
-  applyOutlierRemoval(20, 1.0);
-  findNormals(50);
-  segmentPlane(0.1, 100, 0.03);
-}
-
-std::vector<PointCPtr> cw1::getBasketClouds()
-{
-  return extractEuclideanClusters(0.02, 100, 25000);
   
-}
 
-std::vector<PointCPtr> cw1::getBoxClouds()
-{
-  return extractEuclideanClusters(0.02, 100, 25000);
-}
-
-Eigen::Vector3f cw1::toWorldFrame(Eigen::Vector3f local_point)
-{
-  geometry_msgs::msg::PointStamped local, world;
-  local.header.frame_id = g_input_pc_frame_id;
-  local.header.stamp = latest_cloud_msg_->header.stamp;
-  local.point.x = local_point.x();
-  local.point.y = local_point.y();
-  local.point.z = local_point.z();
-
-  try {
-    tf_buffer_->transform(local, world, "panda_link0");
-  } catch (tf2::TransformException &ex) {
-    RCLCPP_WARN(node_->get_logger(), "Transform failed: %s", ex.what());
-    return local_point;
-  }
-
-  return Eigen::Vector3f(world.point.x, world.point.y, world.point.z);
-}
-
-bool cw1::moveToBirdeye(moveit::planning_interface::MoveGroupInterface &move_group)
-{
-  RCLCPP_INFO(node_->get_logger(), "Moving to 'birdeye' joint pose");
-
-  std::vector<double> joint_positions = {
-    0 * M_PI / 180.0, //panda_joint_1
-    0 * M_PI / 180.0, //panda_joint_2
-    0 * M_PI / 180.0, //panda_joint_3
-    -45.0 * M_PI / 180.0, //panda_joint_4
-    0 * M_PI / 180.0, //panda_joint_5
-    45.0 * M_PI / 180.0, //panda_joint_6
-    45.0 * M_PI / 180.0 //panda_joint_7
-  };
-
-  move_group.setJointValueTarget(joint_positions);
-
-  moveit::planning_interface::MoveGroupInterface::Plan plan;
-
-  if (move_group.plan(plan) == moveit::core::MoveItErrorCode::SUCCESS)
-  {
-    if (move_group.execute(plan) == moveit::core::MoveItErrorCode::SUCCESS)
-    {
-      rclcpp::sleep_for(std::chrono::milliseconds(1000));
-      return true;
-    }
-  }
-
-  RCLCPP_ERROR(node_->get_logger(), "Failed to move to 'birdeye' joint pose");
-
-  return false;
-
-}
 
 
 

@@ -70,6 +70,8 @@
 #include <pcl/segmentation/sac_segmentation.h>
 #include <pcl/segmentation/extract_clusters.h>
 
+#include <Eigen/Core>
+
 // #include <pcl/visualization/pcl_visualizer.h>
 
 #include "cw1_world_spawner/srv/task1_service.hpp"
