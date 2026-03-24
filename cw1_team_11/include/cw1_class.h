@@ -39,6 +39,8 @@ solution is contained within the cw1_team_<your_team_number> package */
 #include <pcl/segmentation/sac_segmentation.h>
 #include <pcl/segmentation/extract_clusters.h>
 
+#include <Eigen/Core>
+
 // #include <pcl/visualization/pcl_visualizer.h>
 
 #include "cw1_world_spawner/srv/task1_service.hpp"
@@ -79,6 +81,8 @@ public:
   void extractEuclideanClusters(double cluster_tolerance, int min_size, int max_size);
   void pubFilteredPCMsg(
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr &pc_pub, PointC &pc, const std_msgs::msg::Header &header);
+  void processCloud();
+  Eigen::Vector3f getCentroid(PointC &in_cloud_ptr);
     /* ----- class member variables ----- */
 
   rclcpp::Node::SharedPtr node_;
@@ -90,6 +94,17 @@ public:
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_state_sub_;
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr cloud_sub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr g_pub_cloud;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr g_pub_passthrough;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr g_pub_outlier;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr g_pub_plane;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr g_pub_cluster1;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr g_pub_cluster2;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr g_pub_cluster3;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr g_pub_cluster4;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr g_pub_cluster5;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr g_pub_cluster6;
+  std::array<rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr, 6> g_pub_clusters;
+
 
   
   sensor_msgs::msg::PointCloud2::SharedPtr latest_cloud_msg_;
@@ -150,6 +165,20 @@ public:
   double post_grasp_lift_z_ = 0.05;
   double gripper_grasp_width_ = 0.03;
   double joint_state_wait_timeout_sec_ = 2.0;
+
+  double pcl_voxel_leaf_size_      = 0.01;
+  double pcl_pass_min_             = 0.0;
+  double pcl_pass_max_             = 0.7;
+  std::string pcl_pass_axis_       = "x";
+  int    pcl_outlier_mean_k_       = 20;
+  double pcl_outlier_stddev_       = 1.0;
+  int    pcl_normal_k_             = 50;
+  double pcl_plane_normal_weight_  = 0.1;
+  int    pcl_plane_max_iterations_ = 100;
+  double pcl_plane_distance_       = 0.03;
+  double pcl_cluster_tolerance_    = 0.02;
+  int    pcl_cluster_min_size_     = 100;
+  int    pcl_cluster_max_size_     = 25000;
 
   std::string task2_capture_dir_ = "/tmp/cw1_task2_capture";
 };
