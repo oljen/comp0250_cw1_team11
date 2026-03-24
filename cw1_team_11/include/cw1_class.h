@@ -40,6 +40,7 @@ solution is contained within the cw1_team_<your_team_number> package */
 #include <pcl/segmentation/extract_clusters.h>
 
 #include <Eigen/Core>
+#include <cmath>
 
 // #include <pcl/visualization/pcl_visualizer.h>
 
@@ -78,11 +79,12 @@ public:
   void applyOutlierRemoval(int mean_k, double stddev);
   void findNormals(int normal_k);
   void segmentPlane(double normal_dist_weight, int max_iterations, double distance);
-  void extractEuclideanClusters(double cluster_tolerance, int min_size, int max_size);
+  std::vector<pcl::PointIndices> extractEuclideanClusters(double cluster_tolerance, int min_size, int max_size);
   void pubFilteredPCMsg(
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr &pc_pub, PointC &pc, const std_msgs::msg::Header &header);
   void processCloud();
   Eigen::Vector3f getCentroid(PointC &in_cloud_ptr);
+  std::string colorOfPointCloud(PointC &in_cloud_ptr, float threshold);
     /* ----- class member variables ----- */
 
   rclcpp::Node::SharedPtr node_;
@@ -182,6 +184,26 @@ public:
   int    pcl_cluster_max_size_     = 25000;
 
   std::string task2_capture_dir_ = "/tmp/cw1_task2_capture";
+
+
+  
+  // Create an array of all colors
+
+  static constexpr size_t num_colors = 6;
+  const std::array<std::array<float, 3>, num_colors> colors = {{
+      {0.1f, 0.1f, 0.8f},   // blue
+      {0.8f, 0.1f, 0.8f},   // purple
+      {0.8f, 0.1f, 0.1f},   // red
+      {0.1f, 0.8f, 0.1f},   // green
+      {1.0f, 1.0f, 1.0f},   // white
+      {0.0f, 0.0f, 0.0f}    // black
+  }};  
+  
+  const std::array<std::string, num_colors> color_names = {"blue", "purple", "red", "green", "white", "black"};
+
+  const std::string no_color = "none";
+
+
 };
 
 #endif // end of include guard for CW1_CLASS_H_
