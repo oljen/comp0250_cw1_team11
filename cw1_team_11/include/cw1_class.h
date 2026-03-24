@@ -105,6 +105,7 @@ public:
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr g_pub_cluster6;
   std::array<rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr, 6> g_pub_clusters;
 
+  rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_cb_handle_;
 
   
   sensor_msgs::msg::PointCloud2::SharedPtr latest_cloud_msg_;
@@ -168,8 +169,8 @@ public:
 
   double pcl_voxel_leaf_size_      = 0.01;
   double pcl_pass_min_             = 0.0;
-  double pcl_pass_max_             = 0.7;
-  std::string pcl_pass_axis_       = "x";
+  double pcl_pass_max_             = 0.5;
+  std::string pcl_pass_axis_       = "y";
   int    pcl_outlier_mean_k_       = 20;
   double pcl_outlier_stddev_       = 1.0;
   int    pcl_normal_k_             = 50;

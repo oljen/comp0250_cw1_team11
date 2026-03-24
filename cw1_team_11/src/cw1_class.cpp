@@ -77,11 +77,11 @@ cw1::cw1(const rclcpp::Node::SharedPtr &node)
   pcl_cluster_max_size_     = node_->declare_parameter("pcl.cluster_max_size",     pcl_cluster_max_size_);
 
   // ── Live-update callback ───────────────────────────────────────────
-  node_->add_on_set_parameters_callback(
+  param_cb_handle_= node_->add_on_set_parameters_callback(
     [this](const std::vector<rclcpp::Parameter> &params)
     {
 
-      RCLCPP_INFO(node_->get_logger(), "Callback param reset triggered");
+      RCLCPP_INFO_STREAM(node_->get_logger(), "Callback param reset triggered");
 
       for (const auto &p : params) {
         const auto &n = p.get_name();

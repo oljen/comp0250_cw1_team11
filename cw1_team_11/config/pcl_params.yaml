@@ -1,10 +1,10 @@
-cw1_solution_node:
+/cw1_solution_node:
   ros__parameters:
     pcl:
       voxel_leaf_size:      0.01
-      pass_min:             0.0
-      pass_max:             0.7
-      pass_axis:            "x"
+      pass_min:             -0.4
+      pass_max:             -0.05
+      pass_axis:            "y"
       outlier_mean_k:       20
       outlier_stddev:       1.0
       normal_k:             50
