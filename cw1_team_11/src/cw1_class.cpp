@@ -54,6 +54,13 @@ cw1::cw1(const rclcpp::Node::SharedPtr &node)
   g_cloud_plane = std::make_shared<PointC>();
   g_cloud_segmented_plane = std::make_shared<PointC>();
   g_cloud_cluster = std::make_shared<PointC>();
+  g_tree_ptr = std::make_shared<pcl::search::KdTree<PointT>>();
+  g_tree_ptr_euclidean = std::make_shared<pcl::search::KdTree<PointT>>();
+  g_cloud_normals = std::make_shared<pcl::PointCloud<pcl::Normal>>();
+  g_cloud_segmented_normals = std::make_shared<pcl::PointCloud<pcl::Normal>>();
+  g_inliers_plane = std::make_shared<pcl::PointIndices>();
+  g_coeff_plane = std::make_shared<pcl::ModelCoefficients>();
+
 
 
   // advertise solutions for coursework tasks
@@ -253,28 +260,46 @@ cw1::t2_callback(
   move_group2.plan(plan2) == moveit::core::MoveItErrorCode::SUCCESS);
   if (!success) {
     RCLCPP_ERROR(node_->get_logger(), "Planning to hover pose failed");
-    return;
+    // return;
   }
 
   auto exec_result2 = move_group2.execute(plan2);
   if (exec_result2 != moveit::core::MoveItErrorCode::SUCCESS) {
     RCLCPP_ERROR(node_->get_logger(), "Execution to hover pose failed");
-    return;
+    // return;
   }
 
 
   if (latest_cloud_msg_) {
+
+
+
+      RCLCPP_INFO_STREAM(node_->get_logger(), "creating cloud");
       rosTopicToCloud(latest_cloud_msg_);
+      applyVoxelGrid(0.01);
+      applyPassthrough(0.0, 0.7, "x");
+      pubFilteredPCMsg(g_pub_cloud, *g_cloud_filtered, header);
+
+      applyOutlierRemoval(20, 1.00);
+      findNormals(50);
+      segmentPlane(0.1, 100, 0.03);
+
+      extractEuclideanClusters(0.02, 100, 25000);
+      //show largest cluster
+      // pubFilteredPCMsg(g_pub_cloud, *g_cloud_cluster, header);
+
+
+
+      std_msgs::msg::Header header;
+      header.frame_id = "color";
+      header.stamp = latest_cloud_msg_->header.stamp;
+
+
+
   } else {
       RCLCPP_WARN(node_->get_logger(), "No point cloud message received yet.");
-  }  applyVoxelGrid(0.01);
-  applyPassthrough(0.0, 0.7, "x");
-  applyOutlierRemoval(20, 1.00);
-  findNormals(50);
-  segmentPlane(0.1, 100, 0.03);
-  extractEuclideanClusters(0.02, 100, 25000);
+  }  
 
-  pubFilteredPCMsg(g_pub_cloud, *g_cloud_cluster);
 
 
 }
@@ -306,6 +331,9 @@ void cw1::rosTopicToCloud(const sensor_msgs::msg::PointCloud2::SharedPtr cloud_i
 
   *g_cloud_filtered = *g_cloud_ptr;
 
+  RCLCPP_INFO_STREAM(node_->get_logger(), "saved cloud");
+
+
 }
 
 
@@ -320,6 +348,9 @@ void cw1::applyVoxelGrid(double g_leaf_size)
 
   g_cloud_filtered.swap(output_cloud);
 
+  RCLCPP_INFO_STREAM(node_->get_logger(), "grid cloud");
+
+
 }
 
 void cw1::applyPassthrough(double g_pass_min, double g_pass_max, std::string g_pass_axis)
@@ -332,6 +363,10 @@ void cw1::applyPassthrough(double g_pass_min, double g_pass_max, std::string g_p
   g_pt.setFilterLimits(g_pass_min, g_pass_max);
   g_pt.filter(*output_cloud);
   g_cloud_filtered.swap(output_cloud);
+  
+    RCLCPP_INFO_STREAM(node_->get_logger(), "pt cloud");
+
+
 }
 
 void cw1::applyOutlierRemoval(int g_outlier_mean_k, double g_outlier_stddev)
@@ -408,7 +443,7 @@ void cw1::extractEuclideanClusters(double clusterTolerance, int minClusterSize, 
   g_extract_euclidean.extract(cluster_indices);
   
 
-  std::size_t largest_size;
+  std::size_t largest_size = 0;
 
   for (const auto& cluster : cluster_indices)
   {
@@ -430,15 +465,16 @@ void cw1::extractEuclideanClusters(double clusterTolerance, int minClusterSize, 
 
 void cw1::pubFilteredPCMsg(
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr &pc_pub,
-    PointC &pc)
+    PointC &pc,
+    const std_msgs::msg::Header &header)
 {
   
-  std_msgs::msg::Header header;
-  header.frame_id = g_input_pc_frame_id;
-  header.stamp = node_->get_clock()->now();
+  
 
   // publish type
   sensor_msgs::msg::PointCloud2 output;
+
+  RCLCPP_INFO(node_->get_logger(), "FRAME ID: %s", g_input_pc_frame_id.c_str());
 
   //pass input cloud, output PointCloud2 by reference
   pcl::toROSMsg(pc, output);

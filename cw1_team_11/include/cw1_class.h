@@ -39,6 +39,8 @@ solution is contained within the cw1_team_<your_team_number> package */
 #include <pcl/segmentation/sac_segmentation.h>
 #include <pcl/segmentation/extract_clusters.h>
 
+// #include <pcl/visualization/pcl_visualizer.h>
+
 #include "cw1_world_spawner/srv/task1_service.hpp"
 #include "cw1_world_spawner/srv/task2_service.hpp"
 #include "cw1_world_spawner/srv/task3_service.hpp"
@@ -76,7 +78,7 @@ public:
   void segmentPlane(double normal_dist_weight, int max_iterations, double distance);
   void extractEuclideanClusters(double cluster_tolerance, int min_size, int max_size);
   void pubFilteredPCMsg(
-    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr &pc_pub, PointC &pc);
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr &pc_pub, PointC &pc, const std_msgs::msg::Header &header);
     /* ----- class member variables ----- */
 
   rclcpp::Node::SharedPtr node_;
