@@ -53,7 +53,7 @@
 #include <tf2/time.h>
 #include <tf2_ros/transform_listener.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
-
+#include <tf2_sensor_msgs/tf2_sensor_msgs.hpp>
 
 #include <pcl/common/centroid.h>
 #include <pcl/point_cloud.h>
@@ -69,6 +69,9 @@
 #include <pcl/search/kdtree.h>
 #include <pcl/segmentation/sac_segmentation.h>
 #include <pcl/segmentation/extract_clusters.h>
+
+#include <moveit/move_group_interface/move_group_interface.h>
+#include <moveit/planning_scene_interface/planning_scene_interface.h>
 
 #include <Eigen/Core>
 #include <cmath>
@@ -114,6 +117,10 @@ public:
   std::vector<PointCPtr> getBoxClouds();
   std::vector<PointCPtr> getBasketClouds();
   void segmentPlane();
+  Eigen::Vector3f toWorldFrame(Eigen::Vector3f local_point);
+  bool moveToBirdeye(moveit::planning_interface::MoveGroupInterface &move_group);
+
+
 
     /* ----- class member variables ----- */
   // Reusable pick and place function for Tasks 1 and 3
