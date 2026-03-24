@@ -223,6 +223,13 @@ cw1::cw1(const rclcpp::Node::SharedPtr &node)
   g_cloud_plane = std::make_shared<PointC>();
   g_cloud_segmented_plane = std::make_shared<PointC>();
   g_cloud_cluster = std::make_shared<PointC>();
+  g_tree_ptr = std::make_shared<pcl::search::KdTree<PointT>>();
+  g_tree_ptr_euclidean = std::make_shared<pcl::search::KdTree<PointT>>();
+  g_cloud_normals = std::make_shared<pcl::PointCloud<pcl::Normal>>();
+  g_cloud_segmented_normals = std::make_shared<pcl::PointCloud<pcl::Normal>>();
+  g_inliers_plane = std::make_shared<pcl::PointIndices>();
+  g_coeff_plane = std::make_shared<pcl::ModelCoefficients>();
+
 
 
   // advertise solutions for coursework tasks
@@ -500,7 +507,6 @@ void cw1::t2_callback(
   //The max distance away our cluster should be from the input pose
   float basket_distance_threshold = 0.1; 
 
-  pubFilteredPCMsg(g_pub_cloud, *g_cloud_cluster);
 
 
 
@@ -725,6 +731,9 @@ void cw1::applyVoxelGrid(double g_leaf_size)
 
   g_cloud_filtered.swap(output_cloud);
 
+  RCLCPP_INFO_STREAM(node_->get_logger(), "grid cloud");
+
+
 }
 
 void cw1::applyPassthrough(double g_pass_min, double g_pass_max, std::string g_pass_axis)
@@ -873,6 +882,8 @@ void cw1::pubFilteredPCMsg(
 
   // publish type
   sensor_msgs::msg::PointCloud2 output;
+
+  RCLCPP_INFO(node_->get_logger(), "FRAME ID: %s", g_input_pc_frame_id.c_str());
 
   //pass input cloud, output PointCloud2 by reference
   pcl::toROSMsg(pc, output);
