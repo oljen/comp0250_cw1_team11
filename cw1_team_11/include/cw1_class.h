@@ -30,6 +30,7 @@ solution is contained within the cw1_team_<your_team_number> package */
 #include <tf2_sensor_msgs/tf2_sensor_msgs.hpp>
 
 #include <pcl/common/centroid.h>
+#include <pcl/common/common.h>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 #include <pcl/filters/voxel_grid.h>
