@@ -80,6 +80,9 @@ cw1::cw1(const rclcpp::Node::SharedPtr &node)
   node_->add_on_set_parameters_callback(
     [this](const std::vector<rclcpp::Parameter> &params)
     {
+
+      RCLCPP_INFO(node_->get_logger(), "Callback param reset triggered");
+
       for (const auto &p : params) {
         const auto &n = p.get_name();
         if      (n == "pcl.voxel_leaf_size")      pcl_voxel_leaf_size_      = p.as_double();
@@ -130,7 +133,7 @@ cw1::cw1(const rclcpp::Node::SharedPtr &node)
   g_pub_cluster5 = node_->create_publisher<sensor_msgs::msg::PointCloud2>("/cw1_cloud/cloud_cluster5", 1);
   g_pub_cluster6 = node_->create_publisher<sensor_msgs::msg::PointCloud2>("/cw1_cloud/cloud_cluster6", 1);
 
-  g_pub_clusters = [g_pub_cluster1, g_pub_cluster2, g_pub_cluster3, g_pub_cluster4, g_pub_cluster5, g_pub_cluster6];
+  g_pub_clusters = {g_pub_cluster1, g_pub_cluster2, g_pub_cluster3, g_pub_cluster4, g_pub_cluster5, g_pub_cluster6};
 
   
 
@@ -505,6 +508,9 @@ void cw1::extractEuclideanClusters(double clusterTolerance, int minClusterSize, 
 
   for (const auto& cluster : cluster_indices)
   {
+
+
+    
     PointCPtr cloud_cluster(new PointC);
     for (const auto& idx : cluster.indices) {
       cloud_cluster->push_back((*g_cloud_segmented_plane)[idx]);
@@ -518,7 +524,12 @@ void cw1::extractEuclideanClusters(double clusterTolerance, int minClusterSize, 
     header.stamp = latest_cloud_msg_->header.stamp;
 
 
-    pubFilteredPCMsg(pub_clusters[num_cluster], *cloud_cluster, header);
+    pubFilteredPCMsg(g_pub_clusters[num_cluster], *cloud_cluster, header);
+
+    if (cloud_cluster->size() == 0)
+    {
+      continue;
+    }
 
     if (cloud_cluster->size() > largest_size)
     {
@@ -526,7 +537,9 @@ void cw1::extractEuclideanClusters(double clusterTolerance, int minClusterSize, 
       g_cloud_cluster = cloud_cluster;
     }
 
-    Eigen::Vector3f c = getCentroid(cloud_cluster);
+    
+
+    Eigen::Vector3f c = getCentroid(*cloud_cluster);
 
     RCLCPP_INFO(node_->get_logger(), "Centroid %d: x=%.3f y=%.3f z=%.3f", num_cluster, c.x(), c.y(), c.z());
     
@@ -542,13 +555,9 @@ void cw1::extractEuclideanClusters(double clusterTolerance, int minClusterSize, 
 
 Eigen::Vector3f cw1::getCentroid(PointC &in_cloud_ptr)
 {
-  if (in_cloud_ptr->empty()) {
-    RCLCPP_WARN(node_->get_logger(), "getCentroid: empty cloud");
-    return Eigen::Vector3f::Zero();
-  }
-
+  
   Eigen::Vector4f centroid;
-  pcl::compute3DCentroid(*in_cloud_ptr, centroid);
+  pcl::compute3DCentroid(in_cloud_ptr, centroid);
 
   return centroid.head<3>();  // drops the homogeneous w component
 }
