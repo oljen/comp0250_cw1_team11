@@ -71,6 +71,7 @@
 #include <pcl/segmentation/extract_clusters.h>
 
 #include <Eigen/Core>
+#include <cmath>
 
 // #include <pcl/visualization/pcl_visualizer.h>
 
@@ -104,20 +105,12 @@ public:
   void applyOutlierRemoval(int mean_k, double stddev);
   void findNormals(int normal_k);
   void segmentPlane(double normal_dist_weight, int max_iterations, double distance);
-  std::vector<PointCPtr> extractEuclideanClusters(double cluster_tolerance, int min_size, int max_size);
+  std::vector<pcl::PointIndices> extractEuclideanClusters(double cluster_tolerance, int min_size, int max_size);
   void pubFilteredPCMsg(
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr &pc_pub, PointC &pc, const std_msgs::msg::Header &header);
   void processCloud();
   Eigen::Vector3f getCentroid(PointC &in_cloud_ptr);
   std::string colorOfPointCloud(PointC &in_cloud_ptr, float threshold);
-  std::vector<PointCPtr> getBoxClouds();
-  std::vector<PointCPtr> getBasketClouds();
-  void segmentPlane();
-  Eigen::Vector3f toWorldFrame(Eigen::Vector3f local_point);
-  bool moveToBirdeye(moveit::planning_interface::MoveGroupInterface &move_group);
-
-
-
     /* ----- class member variables ----- */
   // Reusable pick and place function for Tasks 1 and 3
   bool pick_and_place(const geometry_msgs::msg::Pose& obj_pose, const geometry_msgs::msg::Point& basket_loc);
@@ -241,4 +234,4 @@ public:
 
 };
 
-#endif
+#endif // end of include guard for CW1_CLASS_H_

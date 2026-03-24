@@ -478,8 +478,8 @@ void cw1::t2_callback(
   // // First movement test: go to a hover pose above the cube
   // geometry_msgs::msg::Pose current_pose = move_group2.getCurrentPose().pose;
 
-  // geometry_msgs::msg::Pose target_pose = current_pose;
-  // target_pose.position.z += 0.31; // Raise by 31cm
+  geometry_msgs::msg::Pose target_pose = current_pose;
+  target_pose.position.z += 0.31; // Raise by 31cm
 
   // move_group2.setPoseTarget(target_pose);
 
@@ -496,6 +496,10 @@ void cw1::t2_callback(
     RCLCPP_ERROR(node_->get_logger(), "Execution to hover pose failed");
     // return;
   }
+
+  //5 second wait as pose moves
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(5000));
 
   processCloud();
 
@@ -787,7 +791,8 @@ void cw1::segmentPlane(double g_plane_normal_dist_weight, int g_plane_max_iterat
   g_extract_normals.filter(*g_cloud_segmented_normals);
 }
 
-std::vector<PointCPtr> cw1::extractEuclideanClusters(double clusterTolerance, int minClusterSize, int maxClusterSize)
+
+std::vector<pcl::PointIndices> cw1::extractEuclideanClusters(double clusterTolerance, int minClusterSize, int maxClusterSize)
 {
   g_tree_ptr_euclidean->setInputCloud(g_cloud_segmented_plane);
   //Configure clustering
@@ -803,6 +808,7 @@ std::vector<PointCPtr> cw1::extractEuclideanClusters(double clusterTolerance, in
   
   int num_cluster = 0;
 
+  return cluster_indices;
   std::size_t largest_size = 0;
 
   int num_cluster = 0;
@@ -842,7 +848,9 @@ std::vector<PointCPtr> cw1::extractEuclideanClusters(double clusterTolerance, in
 
     Eigen::Vector3f c = getCentroid(*cloud_cluster);
 
-    RCLCPP_INFO(node_->get_logger(), "Centroid %d: x=%.3f y=%.3f z=%.3f", num_cluster, c.x(), c.y(), c.z());
+    std::string c_name = colorOfPointCloud(*cloud_cluster, 0.2);
+
+    RCLCPP_INFO(node_->get_logger(), "Centroid %d is %s: x=%.3f y=%.3f z=%.3f", num_cluster, c_name.c_str(), c.x(), c.y(), c.z());
     
     num_cluster = num_cluster + 1;
 
@@ -902,6 +910,65 @@ void cw1::processCloud()
   segmentPlane(pcl_plane_normal_weight_, pcl_plane_max_iterations_, pcl_plane_distance_);
   pubFilteredPCMsg(g_pub_plane, *g_cloud_segmented_plane, header);
   extractEuclideanClusters(pcl_cluster_tolerance_, pcl_cluster_min_size_, pcl_cluster_max_size_);
+
+}
+
+std::string cw1::colorOfPointCloud(PointC &in_cloud_ptr, float threshold)
+{
+
+  float r = 0;
+  float g = 0;
+  float b = 0;
+
+  //average all point colors in the cloud
+
+  for (const auto & pt : in_cloud_ptr.points)
+  {
+    r = r + (pt.r / 255.0);
+    g = g + (pt.g / 255.0);
+    b = b + (pt.b / 255.0);
+  }
+
+
+  r = r / in_cloud_ptr.size();
+  g = g / in_cloud_ptr.size();
+  b = b / in_cloud_ptr.size();
+
+
+  float min_dist = 1000;
+  int min_color_idx;
+
+  RCLCPP_INFO(node_->get_logger(), "num_pts = %d, r=%.3f g=%.3f b=%.3f", static_cast<int>(in_cloud_ptr.size()), r, g, b);
+
+
+  // find closest color
+  for (size_t i = 0; i < num_colors; i++)
+  {
+
+    std::array<float, 3> color = colors[i];
+    //distance between average and saved color
+    float dist = std::sqrt(std::pow(r - color[0], 2) + std::pow(g - color[1], 2) + std::pow(b - color[2], 2));
+    RCLCPP_INFO(node_->get_logger(), "dist=%.3f", dist);
+
+
+    if (dist < min_dist)
+    {
+      min_dist = dist;
+      min_color_idx = i;
+    }
+
+  }
+
+
+  //check to see if closest color is in range
+  if (min_dist < threshold)
+  {
+    return color_names[min_color_idx];
+  }
+  else
+  {
+    return no_color;
+  }
 
 }
 
