@@ -183,7 +183,7 @@ Visualization Manager:
     Unreliable: false
     Value: true
   - Class: rviz_default_plugins/TF
-    Enabled: true
+    Enabled: false
     Name: TF
   Global Options:
     Background Color: 32; 32; 32
