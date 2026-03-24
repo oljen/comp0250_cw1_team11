@@ -16,6 +16,7 @@ solution is contained within the cw1_team_<your_team_number> package */
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include <geometry_msgs/msg/point_stamped.hpp>
 
 #include <pcl_conversions/pcl_conversions.h>
 #include <tf2/exceptions.h>
@@ -79,12 +80,16 @@ public:
   void applyOutlierRemoval(int mean_k, double stddev);
   void findNormals(int normal_k);
   void segmentPlane(double normal_dist_weight, int max_iterations, double distance);
-  std::vector<pcl::PointIndices> extractEuclideanClusters(double cluster_tolerance, int min_size, int max_size);
+  std::vector<PointCPtr> extractEuclideanClusters(double cluster_tolerance, int min_size, int max_size);
   void pubFilteredPCMsg(
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr &pc_pub, PointC &pc, const std_msgs::msg::Header &header);
   void processCloud();
   Eigen::Vector3f getCentroid(PointC &in_cloud_ptr);
   std::string colorOfPointCloud(PointC &in_cloud_ptr, float threshold);
+  std::vector<PointCPtr> getBoxClouds();
+  std::vector<PointCPtr> getBasketClouds();
+  void segmentPlane();
+
     /* ----- class member variables ----- */
 
   rclcpp::Node::SharedPtr node_;
