@@ -41,6 +41,19 @@ static constexpr int MAX_ATTEMPTS = 4;
  * 
  */
 
+
+/**
+ *  KEY ASSUMPTIONS
+ * 
+ * 1) All values in the cw (box size etc) are taken as fixed and are hard coded
+ * 2) Only the colors specified in the cw are possible item colors
+ * 3) Baskets and boxes will always be on the platform, never 'floating'
+ * 4) baskets are not within each other
+ * 5) If multiple baskets of the same colors exist, it doesn't matter which one the box goes into
+ * 
+ * 
+ */
+
 // Simple helper: create an end-effector pose at (x, y, z)
 // with a basic top-down orientation for the Panda.
 // Robot positioning
@@ -501,39 +514,60 @@ void cw1::t2_callback(
 
   std::this_thread::sleep_for(std::chrono::milliseconds(5000));
 
-  processCloud();
+  segmentPlane();
 
-  // if (latest_cloud_msg_) {
+  std::vector<PointCPtr> baskets = getBasketClouds();
 
-  //     std_msgs::msg::Header header;
-  //     header.frame_id = "color";
-  //     header.stamp = latest_cloud_msg_->header.stamp;
+  //get all basket clouds and their colors/coords
+  std::vector<Eigen::Vector3f> coords;
+  std::vector<std::string> colors;
 
-  //     RCLCPP_INFO_STREAM(node_->get_logger(), "creating cloud");
-  //     rosTopicToCloud(latest_cloud_msg_);
-  //     pubFilteredPCMsg(g_pub_cloud, *g_cloud_filtered, header);
-  //     applyPassthrough(pcl_pass_min_, pcl_pass_max_, pcl_pass_axis_);
-  //     pubFilteredPCMsg(g_pub_passthrough, *g_cloud_filtered, header);
-  //     applyOutlierRemoval(pcl_outlier_mean_k_, pcl_outlier_stddev_);
-  //     pubFilteredPCMsg(g_pub_outlier, *g_cloud_filtered, header);
-  //     findNormals(pcl_normal_k_);
-  //     segmentPlane(pcl_plane_normal_weight_, pcl_plane_max_iterations_, pcl_plane_distance_);
-  //     pubFilteredPCMsg(g_pub_plane, *g_cloud_segmented_plane, header);
-  //     extractEuclideanClusters(pcl_cluster_tolerance_, pcl_cluster_min_size_, pcl_cluster_max_size_);
-      
+  for (size_t i = 0; i < baskets.size(); i++)
+  {
+    coords.push_back(getCentroid(baskets[i]));
+    colors.push_back(colorOfPointCloud(baskets[i], 0.2));
 
+    RCLCPP_INFO(node_->get_logger(), "Centroid %zu is %s: x=%.3f y=%.3f z=%.3f", i, colors[i].c_str(), coords[i].x(), coords[i].y(), coords[i].z());
 
+  }
 
-      
+  //populate the result with none
+  for (size_t i = 0; i < response->basket_colours.size(); i++)
+  {
+    response->basket_colours[i] = no_color;
+  }
+  //The max distance away our cluster should be from the input pose
+  float basket_distance_threshold = 0.1; 
 
-
-
-  // } else {
-  //     RCLCPP_WARN(node_->get_logger(), "No point cloud message received yet.");
-  // }  
+  //go through each cloud, find if it's within a suspected coordinate
 
 
 
+  for (size_t i = 0; i < coords.size(); i++)
+  {
+
+    for (size_t j = 0; j < request->basket_locs.size(); j++)
+    {
+
+      const auto& basket_loc = request->basket_locs[j];
+      //Assume all boxes are on platform, so we don't need to worry about a z discrepancy
+      float dist = std::hypot(coords[i].x() - basket_loc.point.x, coords[i].y() - basket_loc.point.y);
+    
+      if (dist < basket_distance_threshold)
+      {
+        //this coord is close to this cloud! Set that coord as the cloud color
+        response->basket_colours[j] = colors[i];
+
+        RCLCPP_INFO(node_->get_logger(), "Matched cluster %d with object %d as %s", i, j, colors[i].c_str());
+        
+      }
+    
+    
+    }
+
+  }
+
+    
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -791,8 +825,7 @@ void cw1::segmentPlane(double g_plane_normal_dist_weight, int g_plane_max_iterat
   g_extract_normals.filter(*g_cloud_segmented_normals);
 }
 
-
-std::vector<pcl::PointIndices> cw1::extractEuclideanClusters(double clusterTolerance, int minClusterSize, int maxClusterSize)
+std::vector<PointCPtr> cw1::extractEuclideanClusters(double clusterTolerance, int minClusterSize, int maxClusterSize)
 {
   g_tree_ptr_euclidean->setInputCloud(g_cloud_segmented_plane);
   //Configure clustering
@@ -813,11 +846,10 @@ std::vector<pcl::PointIndices> cw1::extractEuclideanClusters(double clusterToler
 
   int num_cluster = 0;
 
+  std::vector<PointCPtr> all_clouds;
+
   for (const auto& cluster : cluster_indices)
   {
-
-
-    
     PointCPtr cloud_cluster(new PointC);
     for (const auto& idx : cluster.indices) {
       cloud_cluster->push_back((*g_cloud_segmented_plane)[idx]);
@@ -826,40 +858,32 @@ std::vector<pcl::PointIndices> cw1::extractEuclideanClusters(double clusterToler
     cloud_cluster->height = 1;
     cloud_cluster->is_dense = true;
 
-    std_msgs::msg::Header header;
-    header.frame_id = "color";
-    header.stamp = latest_cloud_msg_->header.stamp;
-
-
-    pubFilteredPCMsg(g_pub_clusters[num_cluster], *cloud_cluster, header);
 
     if (cloud_cluster->size() == 0)
     {
       continue;
     }
 
-    if (cloud_cluster->size() > largest_size)
-    {
-      largest_size = cloud_cluster->size();
-      g_cloud_cluster = cloud_cluster;
-    }
+    // For testing only
+    std_msgs::msg::Header header;
+    header.frame_id = "color";
+    header.stamp = latest_cloud_msg_->header.stamp;
+    pubFilteredPCMsg(g_pub_clusters[num_cluster], *cloud_cluster, header);
 
-    
-
-    Eigen::Vector3f c = getCentroid(*cloud_cluster);
-
-    std::string c_name = colorOfPointCloud(*cloud_cluster, 0.2);
-
-    RCLCPP_INFO(node_->get_logger(), "Centroid %d is %s: x=%.3f y=%.3f z=%.3f", num_cluster, c_name.c_str(), c.x(), c.y(), c.z());
-    
     num_cluster = num_cluster + 1;
 
     if (num_cluster >= 6)
     {
       break;
     }
+    //for testing only
 
+    
+    all_clouds.push_back(cloud_cluster);
   }
+  
+  return all_clouds;
+
 }
 
 Eigen::Vector3f cw1::getCentroid(PointC &in_cloud_ptr)
@@ -958,8 +982,6 @@ std::string cw1::colorOfPointCloud(PointC &in_cloud_ptr, float threshold)
     }
 
   }
-
-
   //check to see if closest color is in range
   if (min_dist < threshold)
   {
@@ -972,7 +994,26 @@ std::string cw1::colorOfPointCloud(PointC &in_cloud_ptr, float threshold)
 
 }
 
+void cw1::segmentPlane()
+{
+  rosTopicToCloud(latest_cloud_msg_);
+  applyVoxelGrid(0.01);
+  applyPassthrough(-0.4, 0.1, "y");
+  applyOutlierRemoval(20, 1.0);
+  findNormals(50);
+  segmentPlane(0.1, 100, 0.03);
+}
+
+std::vector<PointCPtr> cw1::getBasketClouds()
+{
+  return extractEuclideanClusters(0.02, 100, 25000);
   
+}
+
+std::vector<PointCPtr> cw1::getBoxClouds()
+{
+  return extractEuclideanClusters(0.02, 100, 25000);
+}
 
 
 
