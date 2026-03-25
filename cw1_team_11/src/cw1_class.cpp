@@ -570,7 +570,7 @@ cw1::t3_callback(
     for (size_t j = 0; j < baskets.size(); j++)
     {
 
-      if (color == basket_colors[j])
+      if (color != no_color && color == basket_colors[j])
       {
         //its a match!!
 
