@@ -1,7 +1,8 @@
 /* COMP0250 Coursework 1 - Team 11
  *
- * 
- * Credits - https://github.com/elena-ecn/pick-and-place
+ * Got task 1 pick and place working. 
+ * Moved the main sequence into pick_and_place() so we can reuse it for task 3.
+ * * Credits - https://github.com/elena-ecn/pick-and-place
  * https://github.com/robosac333/Franka_Panda_Moveit2_Pick_Place
  * https://github.com/omarrayyann/pick-and-place-franke
  */
@@ -27,16 +28,13 @@ static constexpr int MAX_ATTEMPTS = 4;
 
 
 /**
- *  KEY ASSUMPTIONS
- * 
- * 1) All values in the cw (box size etc) are taken as fixed and are hard coded
+ * KEY ASSUMPTIONS
+ * * 1) All values in the cw (box size etc) are taken as fixed and are hard coded
  * 2) Only the colors specified in the cw are possible item colors
  * 3) Baskets and boxes will always be on the platform, never 'floating'
  * 4) baskets are not within each other
  * 5) If multiple baskets of the same colors exist, it doesn't matter which one the box goes into
- * 
- * 
- */
+ * * */
 
 // LOCAL MOVEIT HELPER FUNCTIONS //
 
@@ -55,6 +53,19 @@ static geometry_msgs::msg::Pose td_pose(double x, double y, double z)
   p.orientation.z = 0; p.orientation.w = 0; return p;
 }
 
+static geometry_msgs::msg::Pose grasp_pose(double x, double y, double z)
+{
+  geometry_msgs::msg::Pose p;
+  p.position.x = x; p.position.y = y; p.position.z = z;
+  // pre-calculated quaternion for roll=180, pitch=0, yaw=-45 degrees.
+  // this locks the global orientation so fingers always align with cube faces.
+  p.orientation.x = 0.9238795;
+  p.orientation.y = -0.3826834;
+  p.orientation.z = 0.0;
+  p.orientation.w = 0.0; 
+  return p;
+}
+
 static inline double ft2l8(double z) { return z + FTIP; }
 
 // Logic for movement of the Franka 
@@ -69,9 +80,9 @@ static bool joint_move(
     moveit::planning_interface::MoveGroupInterface::Plan p;
     if (m.plan(p) != moveit::core::MoveItErrorCode::SUCCESS) continue;
     if (m.execute(p) == moveit::core::MoveItErrorCode::SUCCESS) {
-      RCLCPP_INFO(l, "%s: OK", d.c_str()); return true; }
+      RCLCPP_INFO(l, "%s: ok", d.c_str()); return true; }
   }
-  RCLCPP_ERROR(l, "%s: FAIL", d.c_str()); return false;
+  RCLCPP_ERROR(l, "%s: failed", d.c_str()); return false;
 }
 
 static bool cart_move(
@@ -83,7 +94,7 @@ static bool cart_move(
   moveit_msgs::msg::RobotTrajectory tr;
   double f = m.computeCartesianPath(w, 0.005, 0.0, tr);
   if (f >= 0.90 && m.execute(tr) == moveit::core::MoveItErrorCode::SUCCESS) {
-    RCLCPP_INFO(l, "%s: OK (%.0f%%)", d.c_str(), f*100); return true; }
+    RCLCPP_INFO(l, "%s: ok (%.0f%%)", d.c_str(), f*100); return true; }
   return joint_move(m, t, l, d);
 }
 
@@ -96,7 +107,7 @@ static bool open_gripper(const rclcpp::Node::SharedPtr &n, const rclcpp::Logger 
   moveit::planning_interface::MoveGroupInterface::Plan p;
   if (h.plan(p) != moveit::core::MoveItErrorCode::SUCCESS) return false;
   if (h.execute(p) != moveit::core::MoveItErrorCode::SUCCESS) return false;
-  RCLCPP_INFO(l, "Gripper is now open"); return true;
+  RCLCPP_INFO(l, "opening gripper"); return true;
 }
 
 static void strong_grip(const rclcpp::Node::SharedPtr &n, const rclcpp::Logger &l)
@@ -105,18 +116,17 @@ static void strong_grip(const rclcpp::Node::SharedPtr &n, const rclcpp::Logger &
   h.setMaxVelocityScalingFactor(1.0);
   h.setMaxAccelerationScalingFactor(1.0);
   
-  
-  RCLCPP_INFO(l, " GRIP (j1=0.010)");
-  h.setJointValueTarget("panda_finger_joint1", 0.010);
-  h.setJointValueTarget("panda_finger_joint2", 0.010);
+  // set to 0.020 so gazebo doesn't freak out and abort the trajectory. cube is 0.04m wide.
+  RCLCPP_INFO(l, "closing gripper");
+  h.setJointValueTarget("panda_finger_joint1", 0.020);
   
   moveit::planning_interface::MoveGroupInterface::Plan p;
   if (h.plan(p) != moveit::core::MoveItErrorCode::SUCCESS) {
-    RCLCPP_WARN(l, " Grip plan failed"); return;
+    RCLCPP_WARN(l, "grip plan failed"); return;
   }
   h.execute(p);
   std::this_thread::sleep_for(std::chrono::milliseconds(1500));
-  RCLCPP_INFO(l, " Grip and roce is being applied");
+  RCLCPP_INFO(l, "grip applied");
 }
 
 static bool go_home(
@@ -127,23 +137,8 @@ static bool go_home(
     moveit::planning_interface::MoveGroupInterface::Plan p;
     if (m.plan(p) != moveit::core::MoveItErrorCode::SUCCESS) continue;
     if (m.execute(p) == moveit::core::MoveItErrorCode::SUCCESS) {
-      RCLCPP_INFO(l, "Home ok"); return true; } }
-  RCLCPP_ERROR(l, "Home fail"); return false;
-}
-
-static bool align_wrist(
-  moveit::planning_interface::MoveGroupInterface &m,
-  double j7, const rclcpp::Logger &l)
-{
-  auto jv = m.getCurrentJointValues();
-  if (jv.size() < 7) return false;
-  RCLCPP_INFO(l, "Wrist: %.4f -> %.4f", jv[6], j7);
-  jv[6] = j7;
-  m.setJointValueTarget(jv);
-  moveit::planning_interface::MoveGroupInterface::Plan p;
-  if (m.plan(p) != moveit::core::MoveItErrorCode::SUCCESS) return false;
-  if (m.execute(p) != moveit::core::MoveItErrorCode::SUCCESS) return false;
-  RCLCPP_INFO(l, "Wrist aligned"); return true;
+      RCLCPP_INFO(l, "moved to home"); return true; } }
+  RCLCPP_ERROR(l, "failed to go home"); return false;
 }
 
 
@@ -309,17 +304,18 @@ void cw1::t1_callback(
   (void)response;
   auto L = node_->get_logger();
 
-  RCLCPP_INFO(L, "Task 1");
-  RCLCPP_INFO(L, "Cube (%.4f,%.4f,%.4f) Basket (%.4f,%.4f,%.4f)", 
+  RCLCPP_INFO(L, "starting task 1...");
+  RCLCPP_INFO(L, "cube at (%.4f,%.4f,%.4f), basket at (%.4f,%.4f,%.4f)", 
               request->object_loc.pose.position.x, request->object_loc.pose.position.y, request->object_loc.pose.position.z, 
               request->goal_loc.point.x, request->goal_loc.point.y, request->goal_loc.point.z);
 
+  // run the sequence
   bool success = pick_and_place(request->object_loc.pose, request->goal_loc.point);
 
   if (success) {
-    RCLCPP_INFO(L, "Task 1 complete");
+    RCLCPP_INFO(L, "task 1 finished successfully");
   } else {
-    RCLCPP_ERROR(L, "Task 1 error");
+    RCLCPP_ERROR(L, "task 1 failed");
   }
 }
 
@@ -651,7 +647,7 @@ bool cw1::pick_and_place(const geometry_msgs::msg::Pose& obj_pose, const geometr
   arm.setMaxVelocityScalingFactor(0.5);
   arm.setMaxAccelerationScalingFactor(0.5);
 
-  // Fixing issues with the gripper and floor tension
+  // +5mm to z so we don't scrape the floor and fail
   const double grasp_l8   = ft2l8(cz + 0.005);
   const double transit_l8 = 0.40;
   const double release_l8 = ft2l8(bz + 0.10);
@@ -661,36 +657,26 @@ bool cw1::pick_and_place(const geometry_msgs::msg::Pose& obj_pose, const geometr
 
   go_home(arm, L);
 
-  // Step by step instructions for the panda to complete the pick and place
-
-  // 1. Moving above the cube and opening the gripper
-  if (!joint_move(arm, td_pose(cx, cy, transit_l8), L, "Above")) return fail();
+  // get in position above the block (using our locked grasp_pose)
+  if (!joint_move(arm, grasp_pose(cx, cy, transit_l8), L, "above")) return fail();
   if (!open_gripper(node_, L)) return fail();
 
-  // 2. Moving to height to grasp the cube
-  if (!cart_move(arm, make_pose(cx, cy, pre_grasp_l8, td_pose(0,0,0).orientation), L, "Pre-grasp high")) return fail();
+  if (!cart_move(arm, grasp_pose(cx, cy, pre_grasp_l8), L, "pre-grasp")) return fail();
   std::this_thread::sleep_for(std::chrono::milliseconds(400));
 
-  // 3. Rotating wrist of franka is necessary
-  if (!align_wrist(arm, M_PI_4, L)) return fail();   
-
-  // 4. Getting the corrected pose
-  auto ori = arm.getCurrentPose().pose.orientation;
-
-  // 5. Descend and grip
-  if (!cart_move(arm, make_pose(cx, cy, grasp_l8, ori), L, "Descend")) return fail();
+  // drop down and grab (no wrist alignment hack needed anymore!)
+  if (!cart_move(arm, grasp_pose(cx, cy, grasp_l8), L, "descend")) return fail();
   strong_grip(node_, L);
 
-  // 6. Lift up
-  if (!cart_move(arm, make_pose(cx, cy, transit_l8, ori), L, "Lift")) return fail();
+  if (!cart_move(arm, grasp_pose(cx, cy, transit_l8), L, "lift")) return fail();
 
-  // 7. Move to basket and place cube
-  if (!joint_move(arm, make_pose(bx, by, transit_l8, ori), L, "To basket")) return fail();
-  if (!cart_move(arm, make_pose(bx, by, release_l8, ori), L, "Lower")) return fail();
+  // move to basket
+  if (!joint_move(arm, grasp_pose(bx, by, transit_l8), L, "to basket")) return fail();
+  if (!cart_move(arm, grasp_pose(bx, by, release_l8), L, "lower")) return fail();
   if (!open_gripper(node_, L)) return fail();
   
-  // 8. Go back to original position when done
-  cart_move(arm, make_pose(bx, by, transit_l8, ori), L, "Retreat");
+  // back off and reset
+  cart_move(arm, grasp_pose(bx, by, transit_l8), L, "retreat");
   go_home(arm, L);
   
   return true; 
@@ -1017,8 +1003,3 @@ Eigen::Vector3f cw1::toWorldFrame(Eigen::Vector3f local_point)
 
   return Eigen::Vector3f(world.point.x, world.point.y, world.point.z);
 }
-
-
-
-
-
