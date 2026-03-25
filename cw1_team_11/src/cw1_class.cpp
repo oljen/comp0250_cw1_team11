@@ -249,9 +249,9 @@ cw1::cw1(const rclcpp::Node::SharedPtr &node)
   joint_state_qos.reliable();
   joint_state_qos.durability_volatile();
   joint_state_sub_ = node_->create_subscription<sensor_msgs::msg::JointState>(
-    "/joint_states", rclcpp::QoS(50).reliable(),
+    "/joint_states", joint_state_qos,
     [this](const sensor_msgs::msg::JointState::ConstSharedPtr) {
-      joint_state_msg_count_.fetch_add(1, std::memory_order_relaxed); }, jo);
+      joint_state_msg_count_.fetch_add(1, std::memory_order_relaxed); }, joint_state_sub_options);
 
   rclcpp::SubscriptionOptions cloud_sub_options;
   cloud_sub_options.callback_group = sensor_cb_group_;
@@ -367,7 +367,7 @@ void cw1::t2_callback(
   {
     //need to store local coordinate points in the world frame
     coords.push_back(toWorldFrame(getCentroid(*baskets[i])));
-    colors.push_back(colorOfPointCloud(*baskets[i], 0.35));
+    colors.push_back(colorOfPointCloud(*baskets[i], 0.2));
 
     RCLCPP_INFO(node_->get_logger(), "Centroid %zu is %s: x=%.3f y=%.3f z=%.3f", i, colors[i].c_str(), coords[i].x(), coords[i].y(), coords[i].z());
 
@@ -408,6 +408,9 @@ void cw1::t2_callback(
   for (size_t i = 0; i < coords.size(); i++)
   {
 
+    size_t nearest_requested_idx = 0;
+    float nearest_requested_dist = basket_distance_threshold;
+
     for (size_t j = 0; j < request->basket_locs.size(); j++)
     {
 
@@ -417,14 +420,23 @@ void cw1::t2_callback(
       RCLCPP_INFO(node_->get_logger(), "T2: compared %zu with %zu, recorded %f", i, j, dist);
 
       //we're in range!
-      if (dist < basket_distance_threshold)
+      if (dist < nearest_requested_dist)
       {
-        //this coord is close to this cloud! Set that coord as the cloud color
-        response->basket_colours[j] = colors[i];
-
+        
+        //store this, but one may be closer (edge case)
+        nearest_requested_idx = j;
+        nearest_requested_dist = dist;
+      
         //RCLCPP_INFO(node_->get_logger(), "Matched cluster %zu with object %zu as %s", i, j, colors[i].c_str());
         
       }
+    }
+
+    //is our closest within the threshold?
+    if (nearest_requested_dist < basket_distance_threshold)
+    {
+      //store the color
+      response->basket_colours[nearest_requested_idx] = colors[i];
     }
 
   }
@@ -588,11 +600,15 @@ cw1::t3_callback(
   {
     const auto& pair = pairs[i];
 
-    geometry_msgs::msg::Point basket = {pair.basket.x(), pair.basket.y(), pair.basket.z()};
-    geometry_msgs::msg::pose box;
-    box.position.x = pair.box.x();
-    box.position.y = pair.box.y();
-    box.position.z = pair.box.z();
+    geometry_msgs::msg::Point basket; 
+    basket.x = pair.basket.x();
+    basket.y = pair.basket.y();
+    basket.z = pair.basket.z();
+
+    geometry_msgs::msg::Pose box;
+    box.position.x = pair.cube.x();
+    box.position.y = pair.cube.y();
+    box.position.z = pair.cube.z();
 
     box.orientation.x = 0.0;
     box.orientation.y = 0.0;
@@ -825,11 +841,6 @@ std::vector<PointCPtr> cw1::extractEuclideanClusters(double clusterTolerance, in
   //Extract clusters
   g_extract_euclidean.extract(cluster_indices);
   
-  int num_cluster = 0;
-
-  return cluster_indices;
-  std::size_t largest_size = 0;
-
   int num_cluster = 0;
 
   std::vector<PointCPtr> all_clouds;
