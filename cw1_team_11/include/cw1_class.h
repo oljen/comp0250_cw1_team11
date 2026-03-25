@@ -5,16 +5,86 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <thread>
+#include <chrono>
+
 
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include <geometry_msgs/msg/point_stamped.hpp>
+
+#include <pcl_conversions/pcl_conversions.h>
+#include <tf2/exceptions.h>
+#include <tf2_ros/buffer.h>
+#include <tf2/time.h>
+#include <tf2_ros/transform_listener.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+#include <tf2_sensor_msgs/tf2_sensor_msgs.hpp>
+
+#include <pcl/common/centroid.h>
+#include <pcl/common/common.h>
+#include <pcl/point_cloud.h>
+#include <pcl/point_types.h>
+#include <pcl/filters/voxel_grid.h>
+#include <pcl/filters/passthrough.h>
+#include <pcl/filters/statistical_outlier_removal.h>
+#include <pcl/filters/extract_indices.h>
+#include <pcl/features/normal_3d.h>
+#include <pcl/ModelCoefficients.h>
+#include <pcl/sample_consensus/method_types.h>
+#include <pcl/sample_consensus/model_types.h>
+#include <pcl/search/kdtree.h>
+#include <pcl/segmentation/sac_segmentation.h>
+#include <pcl/segmentation/extract_clusters.h>
+
+#include <moveit/move_group_interface/move_group_interface.h>
+#include <moveit/planning_scene_interface/planning_scene_interface.h>
+
+#include <Eigen/Core>
+#include <cmath>
+
+// #include <pcl/visualization/pcl_visualizer.h>
 #include <geometry_msgs/msg/pose.hpp>
 #include <geometry_msgs/msg/point.hpp>
+
+#include <pcl_conversions/pcl_conversions.h>
+#include <tf2/exceptions.h>
+#include <tf2/time.h>
+#include <tf2_ros/transform_listener.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+#include <tf2_sensor_msgs/tf2_sensor_msgs.hpp>
+
+#include <pcl/common/centroid.h>
+#include <pcl/point_cloud.h>
+#include <pcl/point_types.h>
+#include <pcl/filters/voxel_grid.h>
+#include <pcl/filters/passthrough.h>
+#include <pcl/filters/statistical_outlier_removal.h>
+#include <pcl/filters/extract_indices.h>
+#include <pcl/features/normal_3d.h>
+#include <pcl/ModelCoefficients.h>
+#include <pcl/sample_consensus/method_types.h>
+#include <pcl/sample_consensus/model_types.h>
+#include <pcl/search/kdtree.h>
+#include <pcl/segmentation/sac_segmentation.h>
+#include <pcl/segmentation/extract_clusters.h>
+
+#include <moveit/move_group_interface/move_group_interface.h>
+#include <moveit/planning_scene_interface/planning_scene_interface.h>
+
+#include <Eigen/Core>
+#include <cmath>
+
+// #include <pcl/visualization/pcl_visualizer.h>
 
 #include "cw1_world_spawner/srv/task1_service.hpp"
 #include "cw1_world_spawner/srv/task2_service.hpp"
 #include "cw1_world_spawner/srv/task3_service.hpp"
+
+typedef pcl::PointXYZRGBA PointT;
+typedef pcl::PointCloud<PointT> PointC;
+typedef PointC::Ptr PointCPtr;
 
 class cw1
 {
@@ -31,6 +101,28 @@ public:
     const std::shared_ptr<cw1_world_spawner::srv::Task3Service::Request> request,
     std::shared_ptr<cw1_world_spawner::srv::Task3Service::Response> response);
 
+    // Add these to the public section of cw1 in the .h:
+  void rosTopicToCloud(const sensor_msgs::msg::PointCloud2::SharedPtr cloud_input_msg);
+  void applyVoxelGrid(double leaf_size);
+  void applyPassthrough(double pass_min, double pass_max, std::string pass_axis);
+  void applyOutlierRemoval(int mean_k, double stddev);
+  void findNormals(int normal_k);
+  void segmentPlane(double normal_dist_weight, int max_iterations, double distance);
+  std::vector<PointCPtr> extractEuclideanClusters(double cluster_tolerance, int min_size, int max_size);
+  void pubFilteredPCMsg(
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr &pc_pub, PointC &pc, const std_msgs::msg::Header &header);
+  void processCloud();
+  Eigen::Vector3f getCentroid(PointC &in_cloud_ptr);
+  std::string colorOfPointCloud(PointC &in_cloud_ptr, float threshold);
+  std::vector<PointCPtr> getBoxClouds();
+  std::vector<PointCPtr> getBasketClouds();
+  void segmentPlane();
+  Eigen::Vector3f toWorldFrame(Eigen::Vector3f local_point);
+  bool moveToBirdeye(moveit::planning_interface::MoveGroupInterface &move_group);
+
+
+
+    /* ----- class member variables ----- */
   // Reusable pick and place function for Tasks 1 and 3
   bool pick_and_place(const geometry_msgs::msg::Pose& obj_pose, const geometry_msgs::msg::Point& basket_loc);
 
@@ -42,6 +134,52 @@ public:
   rclcpp::CallbackGroup::SharedPtr sensor_cb_group_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_state_sub_;
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr cloud_sub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr g_pub_cloud;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr g_pub_passthrough;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr g_pub_outlier;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr g_pub_plane;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr g_pub_cluster1;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr g_pub_cluster2;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr g_pub_cluster3;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr g_pub_cluster4;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr g_pub_cluster5;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr g_pub_cluster6;
+  std::array<rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr, 6> g_pub_clusters;
+
+  rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_cb_handle_;
+
+  
+  sensor_msgs::msg::PointCloud2::SharedPtr latest_cloud_msg_;
+
+  PointCPtr g_cloud_ptr;
+  PointCPtr g_cloud_filtered;
+  PointCPtr g_cloud_plane;
+  PointCPtr g_cloud_segmented_plane;
+  PointCPtr g_cloud_cluster;
+
+  std::string g_input_pc_frame_id;
+
+  pcl::VoxelGrid<PointT> g_vx;
+  pcl::PassThrough<PointT> g_pt;
+  pcl::StatisticalOutlierRemoval<PointT> g_sor;
+
+  pcl::search::KdTree<PointT>::Ptr g_tree_ptr;
+  pcl::search::KdTree<PointT>::Ptr g_tree_ptr_euclidean;
+  pcl::NormalEstimation<PointT, pcl::Normal> g_ne;
+  pcl::PointCloud<pcl::Normal>::Ptr g_cloud_normals;
+  pcl::PointCloud<pcl::Normal>::Ptr g_cloud_segmented_normals;
+
+  pcl::SACSegmentationFromNormals<PointT, pcl::Normal> g_seg;
+  pcl::ExtractIndices<PointT> g_extract_pc;
+  pcl::ExtractIndices<pcl::Normal> g_extract_normals;
+  pcl::EuclideanClusterExtraction<PointT> g_extract_euclidean;
+
+  pcl::PointIndices::Ptr g_inliers_plane;
+  pcl::ModelCoefficients::Ptr g_coeff_plane;
+
+  //Transform Buffer for bringing to world frame
+  std::shared_ptr<tf2_ros::Buffer>            tf_buffer_;
+  std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
   std::atomic<int64_t> latest_joint_state_stamp_ns_{0};
   std::atomic<uint64_t> joint_state_msg_count_{0};
@@ -70,7 +208,41 @@ public:
   double gripper_grasp_width_ = 0.02;
   double joint_state_wait_timeout_sec_ = 2.0;
 
+  double pcl_voxel_leaf_size_      = 0.01;
+  double pcl_pass_min_             = 0.0;
+  double pcl_pass_max_             = 0.5;
+  std::string pcl_pass_axis_       = "y";
+  int    pcl_outlier_mean_k_       = 20;
+  double pcl_outlier_stddev_       = 1.0;
+  int    pcl_normal_k_             = 50;
+  double pcl_plane_normal_weight_  = 0.1;
+  int    pcl_plane_max_iterations_ = 100;
+  double pcl_plane_distance_       = 0.03;
+  double pcl_cluster_tolerance_    = 0.02;
+  int    pcl_cluster_min_size_     = 100;
+  int    pcl_cluster_max_size_     = 25000;
+
   std::string task2_capture_dir_ = "/tmp/cw1_task2_capture";
+
+
+  
+  // Create an array of all colors
+
+  static constexpr size_t num_colors = 6;
+  const std::array<std::array<float, 3>, num_colors> colors = {{
+      {0.1f, 0.1f, 0.8f},   // blue
+      {0.8f, 0.1f, 0.8f},   // purple
+      {0.8f, 0.1f, 0.1f},   // red
+      {0.1f, 0.8f, 0.1f},   // green
+      {1.0f, 1.0f, 1.0f},   // white
+      {0.0f, 0.0f, 0.0f}    // black
+  }};  
+  
+  const std::array<std::string, num_colors> color_names = {"blue", "purple", "red", "green", "white", "black"};
+
+  const std::string no_color = "none";
+
+
 };
 
-#endif
+#endif // end of include guard for CW1_CLASS_H_

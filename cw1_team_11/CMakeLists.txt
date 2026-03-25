@@ -19,6 +19,8 @@ find_package(moveit_core REQUIRED)
 find_package(moveit_msgs REQUIRED)
 find_package(moveit_ros_planning_interface REQUIRED)
 find_package(tf2 REQUIRED)
+find_package(tf2_ros REQUIRED)
+find_package(tf2_sensor_msgs REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(pcl_ros REQUIRED)
 find_package(pcl_conversions REQUIRED)
@@ -53,6 +55,8 @@ ament_target_dependencies(${PROJECT_NAME}_cw1_class_lib
   moveit_msgs
   moveit_ros_planning_interface
   tf2
+  tf2_ros
+  tf2_sensor_msgs
   tf2_geometry_msgs
   pcl_ros
   pcl_conversions
@@ -66,7 +70,7 @@ target_link_libraries(${PROJECT_NAME}_cw1_class_lib
 
 add_executable(cw1_solution_node src/cw1_node.cpp)
 
-ament_target_dependencies(cw1_solution_node
+ament_target_dependencies(cw1_solution_node 
   rclcpp
   std_msgs
   geometry_msgs
@@ -75,6 +79,8 @@ ament_target_dependencies(cw1_solution_node
   moveit_msgs
   moveit_ros_planning_interface
   tf2
+  tf2_ros
+  tf2_sensor_msgs
   tf2_geometry_msgs
   pcl_ros
   pcl_conversions
@@ -82,9 +88,11 @@ ament_target_dependencies(cw1_solution_node
   cw1_world_spawner
 )
 
+
 target_link_libraries(cw1_solution_node
   ${PROJECT_NAME}_cw1_class_lib
 )
+
 
 rosidl_get_typesupport_target(cw1_team_x_typesupport_target
   ${PROJECT_NAME} "rosidl_typesupport_cpp")
