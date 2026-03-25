@@ -106,8 +106,9 @@ static void strong_grip(const rclcpp::Node::SharedPtr &n, const rclcpp::Logger &
   h.setMaxAccelerationScalingFactor(1.0);
   
   
-  RCLCPP_INFO(l, " GRIP (j1=0.020)");
-  h.setJointValueTarget("panda_finger_joint1", 0.020);
+  RCLCPP_INFO(l, " GRIP (j1=0.010)");
+  h.setJointValueTarget("panda_finger_joint1", 0.010);
+  h.setJointValueTarget("panda_finger_joint2", 0.010);
   
   moveit::planning_interface::MoveGroupInterface::Plan p;
   if (h.plan(p) != moveit::core::MoveItErrorCode::SUCCESS) {
