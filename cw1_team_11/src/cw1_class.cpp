@@ -20,10 +20,6 @@
 
 #include <geometry_msgs/msg/pose_stamped.hpp>
 
-
-#include <moveit/move_group_interface/move_group_interface.h>
-#include <moveit/planning_scene_interface/planning_scene_interface.h>
-
 #include <rmw/qos_profiles.h>
 
 static constexpr double FTIP = 0.105;
@@ -42,22 +38,7 @@ static constexpr int MAX_ATTEMPTS = 4;
  * 
  */
 
-
-/**
- *  KEY ASSUMPTIONS
- * 
- * 1) All values in the cw (box size etc) are taken as fixed and are hard coded
- * 2) Only the colors specified in the cw are possible item colors
- * 3) Baskets and boxes will always be on the platform, never 'floating'
- * 4) baskets are not within each other
- * 5) If multiple baskets of the same colors exist, it doesn't matter which one the box goes into
- * 
- * 
- */
-
-// Simple helper: create an end-effector pose at (x, y, z)
-// with a basic top-down orientation for the Panda.
-// Robot positioning
+// LOCAL MOVEIT HELPER FUNCTIONS //
 
 static geometry_msgs::msg::Pose make_pose(double x, double y, double z, const geometry_msgs::msg::Quaternion &o)
 {
@@ -173,6 +154,7 @@ cw1::cw1(const rclcpp::Node::SharedPtr &node)
   service_cb_group_ = node_->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
   sensor_cb_group_  = node_->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
 
+  //init values
   g_cloud_ptr = std::make_shared<PointC>();
   g_cloud_filtered = std::make_shared<PointC>();
   g_cloud_plane = std::make_shared<PointC>();
@@ -185,7 +167,7 @@ cw1::cw1(const rclcpp::Node::SharedPtr &node)
   g_inliers_plane = std::make_shared<pcl::PointIndices>();
   g_coeff_plane = std::make_shared<pcl::ModelCoefficients>();
 
-  // ── PCL filter parameters ──────────────────────────────────────────
+  // PCL DEBUG VALUES
   pcl_voxel_leaf_size_      = node_->declare_parameter("pcl.voxel_leaf_size",      pcl_voxel_leaf_size_);
   pcl_pass_min_             = node_->declare_parameter("pcl.pass_min",             pcl_pass_min_);
   pcl_pass_max_             = node_->declare_parameter("pcl.pass_max",             pcl_pass_max_);
@@ -200,7 +182,7 @@ cw1::cw1(const rclcpp::Node::SharedPtr &node)
   pcl_cluster_min_size_     = node_->declare_parameter("pcl.cluster_min_size",     pcl_cluster_min_size_);
   pcl_cluster_max_size_     = node_->declare_parameter("pcl.cluster_max_size",     pcl_cluster_max_size_);
 
-  // ── Live-update callback ───────────────────────────────────────────
+  // UPDATE CALLBACK FOR PCL DEBUGGING
   param_cb_handle_= node_->add_on_set_parameters_callback(
     [this](const std::vector<rclcpp::Parameter> &params)
     {
@@ -226,69 +208,9 @@ cw1::cw1(const rclcpp::Node::SharedPtr &node)
       rcl_interfaces::msg::SetParametersResult result;
       result.successful = true;
 
-      processCloud();
+      //processCloud();
       return result;
     });
-
-
-
-  g_cloud_ptr = std::make_shared<PointC>();
-  g_cloud_filtered = std::make_shared<PointC>();
-  g_cloud_plane = std::make_shared<PointC>();
-  g_cloud_segmented_plane = std::make_shared<PointC>();
-  g_cloud_cluster = std::make_shared<PointC>();
-  g_tree_ptr = std::make_shared<pcl::search::KdTree<PointT>>();
-  g_tree_ptr_euclidean = std::make_shared<pcl::search::KdTree<PointT>>();
-  g_cloud_normals = std::make_shared<pcl::PointCloud<pcl::Normal>>();
-  g_cloud_segmented_normals = std::make_shared<pcl::PointCloud<pcl::Normal>>();
-  g_inliers_plane = std::make_shared<pcl::PointIndices>();
-  g_coeff_plane = std::make_shared<pcl::ModelCoefficients>();
-
-  // ── PCL filter parameters ──────────────────────────────────────────
-  pcl_voxel_leaf_size_      = node_->declare_parameter("pcl.voxel_leaf_size",      pcl_voxel_leaf_size_);
-  pcl_pass_min_             = node_->declare_parameter("pcl.pass_min",             pcl_pass_min_);
-  pcl_pass_max_             = node_->declare_parameter("pcl.pass_max",             pcl_pass_max_);
-  pcl_pass_axis_            = node_->declare_parameter("pcl.pass_axis",            pcl_pass_axis_);
-  pcl_outlier_mean_k_       = node_->declare_parameter("pcl.outlier_mean_k",       pcl_outlier_mean_k_);
-  pcl_outlier_stddev_       = node_->declare_parameter("pcl.outlier_stddev",       pcl_outlier_stddev_);
-  pcl_normal_k_             = node_->declare_parameter("pcl.normal_k",             pcl_normal_k_);
-  pcl_plane_normal_weight_  = node_->declare_parameter("pcl.plane_normal_weight",  pcl_plane_normal_weight_);
-  pcl_plane_max_iterations_ = node_->declare_parameter("pcl.plane_max_iterations", pcl_plane_max_iterations_);
-  pcl_plane_distance_       = node_->declare_parameter("pcl.plane_distance",       pcl_plane_distance_);
-  pcl_cluster_tolerance_    = node_->declare_parameter("pcl.cluster_tolerance",    pcl_cluster_tolerance_);
-  pcl_cluster_min_size_     = node_->declare_parameter("pcl.cluster_min_size",     pcl_cluster_min_size_);
-  pcl_cluster_max_size_     = node_->declare_parameter("pcl.cluster_max_size",     pcl_cluster_max_size_);
-
-  // ── Live-update callback ───────────────────────────────────────────
-  param_cb_handle_= node_->add_on_set_parameters_callback(
-    [this](const std::vector<rclcpp::Parameter> &params)
-    {
-
-      RCLCPP_INFO_STREAM(node_->get_logger(), "Callback param reset triggered");
-
-      for (const auto &p : params) {
-        const auto &n = p.get_name();
-        if      (n == "pcl.voxel_leaf_size")      pcl_voxel_leaf_size_      = p.as_double();
-        else if (n == "pcl.pass_min")             pcl_pass_min_             = p.as_double();
-        else if (n == "pcl.pass_max")             pcl_pass_max_             = p.as_double();
-        else if (n == "pcl.pass_axis")            pcl_pass_axis_            = p.as_string();
-        else if (n == "pcl.outlier_mean_k")       pcl_outlier_mean_k_       = static_cast<int>(p.as_int());
-        else if (n == "pcl.outlier_stddev")       pcl_outlier_stddev_       = p.as_double();
-        else if (n == "pcl.normal_k")             pcl_normal_k_             = static_cast<int>(p.as_int());
-        else if (n == "pcl.plane_normal_weight")  pcl_plane_normal_weight_  = p.as_double();
-        else if (n == "pcl.plane_max_iterations") pcl_plane_max_iterations_ = static_cast<int>(p.as_int());
-        else if (n == "pcl.plane_distance")       pcl_plane_distance_       = p.as_double();
-        else if (n == "pcl.cluster_tolerance")    pcl_cluster_tolerance_    = p.as_double();
-        else if (n == "pcl.cluster_min_size")     pcl_cluster_min_size_     = static_cast<int>(p.as_int());
-        else if (n == "pcl.cluster_max_size")     pcl_cluster_max_size_     = static_cast<int>(p.as_int());
-      }
-      rcl_interfaces::msg::SetParametersResult result;
-      result.successful = true;
-
-      processCloud();
-      return result;
-    });
-
 
 
   // advertise solutions for coursework tasks
@@ -302,6 +224,7 @@ cw1::cw1(const rclcpp::Node::SharedPtr &node)
     "/task3_start", std::bind(&cw1::t3_callback, this, std::placeholders::_1, std::placeholders::_2),
     rmw_qos_profile_services_default, service_cb_group_);
 
+  //debug publishers
   g_pub_cloud = node_->create_publisher<sensor_msgs::msg::PointCloud2>("/cw1_cloud/cloud", 1);
   g_pub_passthrough = node_->create_publisher<sensor_msgs::msg::PointCloud2>("/cw1_cloud/cloud_passthrough", 1);
   g_pub_outlier = node_->create_publisher<sensor_msgs::msg::PointCloud2>("/cw1_cloud/cloud_outlier", 1);
@@ -373,69 +296,8 @@ cw1::cw1(const rclcpp::Node::SharedPtr &node)
   RCLCPP_INFO(node_->get_logger(), "cw1 class initialised");
 }
 
-// Use this function call Ishan and Chris for Tasks 2 AND 3
 
-bool cw1::pick_and_place(const geometry_msgs::msg::Pose& obj_pose, const geometry_msgs::msg::Point& basket_loc)
-{
-  auto L = node_->get_logger();
 
-  const double cx = obj_pose.position.x;
-  const double cy = obj_pose.position.y;
-  const double cz = obj_pose.position.z;
-  const double bx = basket_loc.x;
-  const double by = basket_loc.y;
-  const double bz = basket_loc.z;
-
-  moveit::planning_interface::MoveGroupInterface arm(node_, "panda_arm");
-  arm.setPlanningTime(10.0);
-  arm.setNumPlanningAttempts(10);
-  arm.setMaxVelocityScalingFactor(0.5);
-  arm.setMaxAccelerationScalingFactor(0.5);
-
-  // Fixing issues with the gripper and floor tension
-  const double grasp_l8   = ft2l8(cz + 0.005);
-  const double transit_l8 = 0.40;
-  const double release_l8 = ft2l8(bz + 0.10);
-  const double pre_grasp_l8 = grasp_l8 + 0.085;
-
-  auto fail = [&]() { open_gripper(node_, L); go_home(arm, L); return false; };
-
-  go_home(arm, L);
-
-  // Step by step instructions for the panda to complete the pick and place
-
-  // 1. Moving above the cube and opening the gripper
-  if (!joint_move(arm, td_pose(cx, cy, transit_l8), L, "Above")) return fail();
-  if (!open_gripper(node_, L)) return fail();
-
-  // 2. Moving to height to grasp the cube
-  if (!cart_move(arm, make_pose(cx, cy, pre_grasp_l8, td_pose(0,0,0).orientation), L, "Pre-grasp high")) return fail();
-  std::this_thread::sleep_for(std::chrono::milliseconds(400));
-
-  // 3. Rotating wrist of franka is necessary
-  if (!align_wrist(arm, M_PI_4, L)) return fail();   
-
-  // 4. Getting the corrected pose
-  auto ori = arm.getCurrentPose().pose.orientation;
-
-  // 5. Descend and grip
-  if (!cart_move(arm, make_pose(cx, cy, grasp_l8, ori), L, "Descend")) return fail();
-  strong_grip(node_, L);
-
-  // 6. Lift up
-  if (!cart_move(arm, make_pose(cx, cy, transit_l8, ori), L, "Lift")) return fail();
-
-  // 7. Move to basket and place cube
-  if (!joint_move(arm, make_pose(bx, by, transit_l8, ori), L, "To basket")) return fail();
-  if (!cart_move(arm, make_pose(bx, by, release_l8, ori), L, "Lower")) return fail();
-  if (!open_gripper(node_, L)) return fail();
-  
-  // 8. Go back to original position when done
-  cart_move(arm, make_pose(bx, by, transit_l8, ori), L, "Retreat");
-  go_home(arm, L);
-  
-  return true; 
-}
 
 // Call back function for task 1 
 
@@ -463,8 +325,7 @@ void cw1::t1_callback(
 void cw1::t2_callback(
   const std::shared_ptr<cw1_world_spawner::srv::Task2Service::Request> request,
   std::shared_ptr<cw1_world_spawner::srv::Task2Service::Response> response)
-{ (void)request; (void)response; RCLCPP_INFO(node_->get_logger(), "Task 2 stub"); }
-
+{ 
   (void)request;
   (void)response;
   RCLCPP_INFO_STREAM(
@@ -486,32 +347,7 @@ void cw1::t2_callback(
     return;
   }
 
-  // move_group2.setPlanningTime(5.0);
-  // move_group2.setMaxVelocityScalingFactor(0.2);
-  // move_group2.setMaxAccelerationScalingFactor(0.2);
-  // // First movement test: go to a hover pose above the cube
-  // geometry_msgs::msg::Pose current_pose = move_group2.getCurrentPose().pose;
 
-  // geometry_msgs::msg::Pose target_pose = current_pose;
-  // target_pose.position.z += 0.31; // Raise by 31cm
-
-  // move_group2.setPoseTarget(target_pose);
-
-  // moveit::planning_interface::MoveGroupInterface::Plan plan2;
-  // bool success = (
-  // move_group2.plan(plan2) == moveit::core::MoveItErrorCode::SUCCESS);
-  // if (!success) {
-  //   RCLCPP_ERROR(node_->get_logger(), "Planning to hover pose failed");
-  //   // return;
-  // }
-
-  // auto exec_result2 = move_group2.execute(plan2);
-  // if (exec_result2 != moveit::core::MoveItErrorCode::SUCCESS) {
-  //   RCLCPP_ERROR(node_->get_logger(), "Execution to hover pose failed");
-  //   // return;
-  // }
-
-  
 
   RCLCPP_INFO(node_->get_logger(), "T2: Start Sleep");
   // 1 second sleep
@@ -520,10 +356,10 @@ void cw1::t2_callback(
   RCLCPP_INFO(node_->get_logger(), "T2: End Sleep");
 
   //Save cloud, run filters, remove plane
-  segmentPlane();
+  filteringPipeline();
 
   //Get point clouds of the basket, store coordinates and colors of those clouds
-  std::vector<PointCPtr> baskets = getBasketClouds();
+  std::vector<PointCPtr> baskets = extractEuclideanClusters(0.02, 100, 25000);
   std::vector<Eigen::Vector3f> coords;
   std::vector<std::string> colors;
 
@@ -564,7 +400,7 @@ void cw1::t2_callback(
   
 
   //The max distance away our cluster should be from the input pose
-  float basket_distance_threshold = 0.1; 
+  float basket_distance_threshold = 0.3; 
 
 
 
@@ -641,18 +477,45 @@ cw1::t3_callback(
     return;
   }
 
-  auto exec_result2 = move_group2.execute(plan2);
-  if (exec_result2 != moveit::core::MoveItErrorCode::SUCCESS) {
-    RCLCPP_ERROR(node_->get_logger(), "Execution to hover pose failed");
-    // return;
-  } 
-
   std::this_thread::sleep_for(std::chrono::milliseconds(5000));
 
-  segmentPlane();
+  filteringPipeline();
 
-  std::vector<PointCPtr> baskets = getBasketClouds();
-  std::vector<PointCPtr> boxes = getBoxClouds();
+   std::vector<PointCPtr> all_clouds = extractEuclideanClusters(0.02, 100, 25000);
+  
+  std::vector<PointCPtr> baskets;
+  std::vector<PointCPtr> boxes;
+
+  for (size_t i = 0; i < all_clouds.size(); i++)
+  {
+    PointT min, max;
+
+    pcl::getMinMax3D(*all_clouds[i], min, max);
+
+    float dx = max.x - min.x;
+    float dy = max.y - min.y;
+
+    RCLCPP_INFO(node_->get_logger(), "Cloud %zu has dimensions dx=%.3f dy=%.3f", i, dx, dy);
+
+    if (dx < 0.07 && dy < 0.07)
+    {
+      //its a box!
+      boxes.push_back(all_clouds[i]);
+    }
+    else
+    {
+      //its a basket!
+      baskets.push_back(all_clouds[i]);
+
+      if (i < 6){
+        std_msgs::msg::Header header;
+        header.frame_id = "color";
+        header.stamp = latest_cloud_msg_->header.stamp;
+        //pubFilteredPCMsg(g_pub_clusters[i], *all_clouds[i], header);
+      }
+    }
+  }
+
 
 
   //get all clouds and their colors/coords
@@ -704,6 +567,7 @@ cw1::t3_callback(
 
         RCLCPP_INFO(node_->get_logger(), "T3: Matched Basket %zu with %zu of color %s", i, j, color.c_str());    
 
+        //need pose of the cube
 
         pairs.push_back({c, basket_coords[j]});
         break;
@@ -723,9 +587,27 @@ cw1::t3_callback(
   for (size_t i = 0; i < pairs.size(); i++)
   {
     const auto& pair = pairs[i];
-    //move it command here
 
-    RCLCPP_INFO(node_->get_logger(), "Move (x=%.3f y=%.3f z=%.3f) to(x=%.3f y=%.3f z=%.3f) ", pair.cube.x(), pair.cube.y(), pair.cube.z(), pair.basket.x(), pair.basket.y(), pair.basket.z());
+    geometry_msgs::msg::Point basket = {pair.basket.x(), pair.basket.y(), pair.basket.z()};
+    geometry_msgs::msg::pose box;
+    box.position.x = pair.box.x();
+    box.position.y = pair.box.y();
+    box.position.z = pair.box.z();
+
+    box.orientation.x = 0.0;
+    box.orientation.y = 0.0;
+    box.orientation.z = 0.0;
+    box.orientation.w = 1.0;
+    
+    if(pick_and_place(box, basket))
+    {
+      RCLCPP_INFO(node_->get_logger(), "Moved (x=%.3f y=%.3f z=%.3f) to(x=%.3f y=%.3f z=%.3f) ", pair.cube.x(), pair.cube.y(), pair.cube.z(), pair.basket.x(), pair.basket.y(), pair.basket.z());
+    }
+    else
+    {
+      RCLCPP_ERROR(node_->get_logger(), "Movement Err");
+    }
+
 
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
@@ -733,6 +615,105 @@ cw1::t3_callback(
 
 }
 
+// MOVEIT FUNCTIONS
+
+bool cw1::pick_and_place(const geometry_msgs::msg::Pose& obj_pose, const geometry_msgs::msg::Point& basket_loc)
+{
+  auto L = node_->get_logger();
+
+  const double cx = obj_pose.position.x;
+  const double cy = obj_pose.position.y;
+  const double cz = obj_pose.position.z;
+  const double bx = basket_loc.x;
+  const double by = basket_loc.y;
+  const double bz = basket_loc.z;
+
+  moveit::planning_interface::MoveGroupInterface arm(node_, "panda_arm");
+  arm.setPlanningTime(10.0);
+  arm.setNumPlanningAttempts(10);
+  arm.setMaxVelocityScalingFactor(0.5);
+  arm.setMaxAccelerationScalingFactor(0.5);
+
+  // Fixing issues with the gripper and floor tension
+  const double grasp_l8   = ft2l8(cz + 0.005);
+  const double transit_l8 = 0.40;
+  const double release_l8 = ft2l8(bz + 0.10);
+  const double pre_grasp_l8 = grasp_l8 + 0.085;
+
+  auto fail = [&]() { open_gripper(node_, L); go_home(arm, L); return false; };
+
+  go_home(arm, L);
+
+  // Step by step instructions for the panda to complete the pick and place
+
+  // 1. Moving above the cube and opening the gripper
+  if (!joint_move(arm, td_pose(cx, cy, transit_l8), L, "Above")) return fail();
+  if (!open_gripper(node_, L)) return fail();
+
+  // 2. Moving to height to grasp the cube
+  if (!cart_move(arm, make_pose(cx, cy, pre_grasp_l8, td_pose(0,0,0).orientation), L, "Pre-grasp high")) return fail();
+  std::this_thread::sleep_for(std::chrono::milliseconds(400));
+
+  // 3. Rotating wrist of franka is necessary
+  if (!align_wrist(arm, M_PI_4, L)) return fail();   
+
+  // 4. Getting the corrected pose
+  auto ori = arm.getCurrentPose().pose.orientation;
+
+  // 5. Descend and grip
+  if (!cart_move(arm, make_pose(cx, cy, grasp_l8, ori), L, "Descend")) return fail();
+  strong_grip(node_, L);
+
+  // 6. Lift up
+  if (!cart_move(arm, make_pose(cx, cy, transit_l8, ori), L, "Lift")) return fail();
+
+  // 7. Move to basket and place cube
+  if (!joint_move(arm, make_pose(bx, by, transit_l8, ori), L, "To basket")) return fail();
+  if (!cart_move(arm, make_pose(bx, by, release_l8, ori), L, "Lower")) return fail();
+  if (!open_gripper(node_, L)) return fail();
+  
+  // 8. Go back to original position when done
+  cart_move(arm, make_pose(bx, by, transit_l8, ori), L, "Retreat");
+  go_home(arm, L);
+  
+  return true; 
+}
+
+//Move to a Birdseye view to detect things
+bool cw1::moveToBirdeye(moveit::planning_interface::MoveGroupInterface &move_group)
+{
+  RCLCPP_INFO(node_->get_logger(), "Moving to 'birdeye' joint pose");
+
+  std::vector<double> joint_positions = {
+    0 * M_PI / 180.0, //panda_joint_1
+    0 * M_PI / 180.0, //panda_joint_2
+    0 * M_PI / 180.0, //panda_joint_3
+    -45.0 * M_PI / 180.0, //panda_joint_4
+    0 * M_PI / 180.0, //panda_joint_5
+    45.0 * M_PI / 180.0, //panda_joint_6
+    45.0 * M_PI / 180.0 //panda_joint_7
+  };
+
+  move_group.setJointValueTarget(joint_positions);
+
+  moveit::planning_interface::MoveGroupInterface::Plan plan;
+
+  if (move_group.plan(plan) == moveit::core::MoveItErrorCode::SUCCESS)
+  {
+    if (move_group.execute(plan) == moveit::core::MoveItErrorCode::SUCCESS)
+    {
+      rclcpp::sleep_for(std::chrono::milliseconds(1000));
+      return true;
+    }
+  }
+
+  RCLCPP_ERROR(node_->get_logger(), "Failed to move to 'birdeye' joint pose");
+
+  return false;
+
+}
+
+// PCL FUNTIONS
 
 void cw1::rosTopicToCloud(const sensor_msgs::msg::PointCloud2::SharedPtr cloud_input_msg)
 {
@@ -793,7 +774,7 @@ void cw1::findNormals(int g_normal_k)
   g_ne.compute(*g_cloud_normals);
 }
 
-void cw1::segmentPlane(double g_plane_normal_dist_weight, int g_plane_max_iterations, double g_plane_distance)
+void cw1::segmentationPipeline(double g_plane_normal_dist_weight, int g_plane_max_iterations, double g_plane_distance)
 {
   // TODO(student-9): Implement normal-plane segmentation.
 
@@ -876,15 +857,13 @@ std::vector<PointCPtr> cw1::extractEuclideanClusters(double clusterTolerance, in
     std_msgs::msg::Header header;
     header.frame_id = "color";
     header.stamp = latest_cloud_msg_->header.stamp;
-    pubFilteredPCMsg(g_pub_clusters[num_cluster], *cloud_cluster, header);
+    //pubFilteredPCMsg(g_pub_clusters[num_cluster], *cloud_cluster, header);
 
     }
     //for testing only
 
     num_cluster = num_cluster + 1;
 
-
-    
     all_clouds.push_back(cloud_cluster);
   }
   
@@ -901,6 +880,7 @@ Eigen::Vector3f cw1::getCentroid(PointC &in_cloud_ptr)
   return centroid.head<3>();  // drops the homogeneous w component
 }
 
+//publish ros message for debug 
 void cw1::pubFilteredPCMsg(
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr &pc_pub,
     PointC &pc,
@@ -917,6 +897,7 @@ void cw1::pubFilteredPCMsg(
 
 }
 
+//debug helper
 void cw1::processCloud()
 {
   if (!latest_cloud_msg_) {
@@ -934,12 +915,13 @@ void cw1::processCloud()
   applyOutlierRemoval(pcl_outlier_mean_k_, pcl_outlier_stddev_);
   pubFilteredPCMsg(g_pub_outlier, *g_cloud_filtered, header);
   findNormals(pcl_normal_k_);
-  segmentPlane(pcl_plane_normal_weight_, pcl_plane_max_iterations_, pcl_plane_distance_);
+  segmentationPipeline(pcl_plane_normal_weight_, pcl_plane_max_iterations_, pcl_plane_distance_);
   pubFilteredPCMsg(g_pub_plane, *g_cloud_segmented_plane, header);
   extractEuclideanClusters(pcl_cluster_tolerance_, pcl_cluster_min_size_, pcl_cluster_max_size_);
 
 }
 
+//get color of a point cloud
 std::string cw1::colorOfPointCloud(PointC &in_cloud_ptr, float threshold)
 {
 
@@ -956,11 +938,9 @@ std::string cw1::colorOfPointCloud(PointC &in_cloud_ptr, float threshold)
     b = b + (pt.b / 255.0);
   }
 
-
   r = r / in_cloud_ptr.size();
   g = g / in_cloud_ptr.size();
   b = b / in_cloud_ptr.size();
-
 
   float min_dist = 1000;
   int min_color_idx;
@@ -996,27 +976,17 @@ std::string cw1::colorOfPointCloud(PointC &in_cloud_ptr, float threshold)
 
 }
 
-void cw1::segmentPlane()
+void cw1::filteringPipeline()
 {
   rosTopicToCloud(latest_cloud_msg_);
   // applyVoxelGrid(0.05);
-  applyPassthrough(-0.3, 0.18, "y");
+  applyPassthrough(-0.31, 0.18, "y");
   applyOutlierRemoval(20, 1.0);
   findNormals(50);
-  segmentPlane(0.1, 100, 0.03);
+  segmentationPipeline(0.1, 100, 0.03);
 }
 
-std::vector<PointCPtr> cw1::getBasketClouds()
-{
-  return extractEuclideanClusters(0.02, 100, 25000);
-  
-}
-
-std::vector<PointCPtr> cw1::getBoxClouds()
-{
-  return extractEuclideanClusters(0.02, 100, 25000);
-}
-
+//convert local coords to world coords
 Eigen::Vector3f cw1::toWorldFrame(Eigen::Vector3f local_point)
 {
   geometry_msgs::msg::PointStamped local, world;
@@ -1036,38 +1006,7 @@ Eigen::Vector3f cw1::toWorldFrame(Eigen::Vector3f local_point)
   return Eigen::Vector3f(world.point.x, world.point.y, world.point.z);
 }
 
-bool cw1::moveToBirdeye(moveit::planning_interface::MoveGroupInterface &move_group)
-{
-  RCLCPP_INFO(node_->get_logger(), "Moving to 'birdeye' joint pose");
 
-  std::vector<double> joint_positions = {
-    0 * M_PI / 180.0, //panda_joint_1
-    0 * M_PI / 180.0, //panda_joint_2
-    0 * M_PI / 180.0, //panda_joint_3
-    -45.0 * M_PI / 180.0, //panda_joint_4
-    0 * M_PI / 180.0, //panda_joint_5
-    45.0 * M_PI / 180.0, //panda_joint_6
-    45.0 * M_PI / 180.0 //panda_joint_7
-  };
-
-  move_group.setJointValueTarget(joint_positions);
-
-  moveit::planning_interface::MoveGroupInterface::Plan plan;
-
-  if (move_group.plan(plan) == moveit::core::MoveItErrorCode::SUCCESS)
-  {
-    if (move_group.execute(plan) == moveit::core::MoveItErrorCode::SUCCESS)
-    {
-      rclcpp::sleep_for(std::chrono::milliseconds(1000));
-      return true;
-    }
-  }
-
-  RCLCPP_ERROR(node_->get_logger(), "Failed to move to 'birdeye' joint pose");
-
-  return false;
-
-}
 
 
 

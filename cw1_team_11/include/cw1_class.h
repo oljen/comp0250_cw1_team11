@@ -76,8 +76,6 @@
 #include <Eigen/Core>
 #include <cmath>
 
-// #include <pcl/visualization/pcl_visualizer.h>
-
 #include "cw1_world_spawner/srv/task1_service.hpp"
 #include "cw1_world_spawner/srv/task2_service.hpp"
 #include "cw1_world_spawner/srv/task3_service.hpp"
@@ -101,22 +99,20 @@ public:
     const std::shared_ptr<cw1_world_spawner::srv::Task3Service::Request> request,
     std::shared_ptr<cw1_world_spawner::srv::Task3Service::Response> response);
 
-    // Add these to the public section of cw1 in the .h:
+  //prototypes for PCL    
   void rosTopicToCloud(const sensor_msgs::msg::PointCloud2::SharedPtr cloud_input_msg);
   void applyVoxelGrid(double leaf_size);
   void applyPassthrough(double pass_min, double pass_max, std::string pass_axis);
   void applyOutlierRemoval(int mean_k, double stddev);
   void findNormals(int normal_k);
-  void segmentPlane(double normal_dist_weight, int max_iterations, double distance);
+  void segmentationPipeline(double normal_dist_weight, int max_iterations, double distance);
   std::vector<PointCPtr> extractEuclideanClusters(double cluster_tolerance, int min_size, int max_size);
   void pubFilteredPCMsg(
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr &pc_pub, PointC &pc, const std_msgs::msg::Header &header);
   void processCloud();
   Eigen::Vector3f getCentroid(PointC &in_cloud_ptr);
   std::string colorOfPointCloud(PointC &in_cloud_ptr, float threshold);
-  std::vector<PointCPtr> getBoxClouds();
-  std::vector<PointCPtr> getBasketClouds();
-  void segmentPlane();
+  void filteringPipeline();
   Eigen::Vector3f toWorldFrame(Eigen::Vector3f local_point);
   bool moveToBirdeye(moveit::planning_interface::MoveGroupInterface &move_group);
 
@@ -133,6 +129,8 @@ public:
   rclcpp::CallbackGroup::SharedPtr service_cb_group_;
   rclcpp::CallbackGroup::SharedPtr sensor_cb_group_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_state_sub_;
+
+  //debug publishers
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr cloud_sub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr g_pub_cloud;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr g_pub_passthrough;
@@ -151,6 +149,7 @@ public:
   
   sensor_msgs::msg::PointCloud2::SharedPtr latest_cloud_msg_;
 
+  //pcl variables
   PointCPtr g_cloud_ptr;
   PointCPtr g_cloud_filtered;
   PointCPtr g_cloud_plane;
@@ -208,9 +207,10 @@ public:
   double gripper_grasp_width_ = 0.02;
   double joint_state_wait_timeout_sec_ = 2.0;
 
+  //hardcode debug values
   double pcl_voxel_leaf_size_      = 0.01;
-  double pcl_pass_min_             = 0.0;
-  double pcl_pass_max_             = 0.5;
+  double pcl_pass_min_             = -0.18;
+  double pcl_pass_max_             = 0.31;
   std::string pcl_pass_axis_       = "y";
   int    pcl_outlier_mean_k_       = 20;
   double pcl_outlier_stddev_       = 1.0;
@@ -228,17 +228,14 @@ public:
   
   // Create an array of all colors
 
-  static constexpr size_t num_colors = 6;
+  static constexpr size_t num_colors = 3;
   const std::array<std::array<float, 3>, num_colors> colors = {{
       {0.1f, 0.1f, 0.8f},   // blue
       {0.8f, 0.1f, 0.8f},   // purple
-      {0.8f, 0.1f, 0.1f},   // red
-      {0.1f, 0.8f, 0.1f},   // green
-      {1.0f, 1.0f, 1.0f},   // white
-      {0.0f, 0.0f, 0.0f}    // black
+      {0.8f, 0.1f, 0.1f}   // red
   }};  
   
-  const std::array<std::string, num_colors> color_names = {"blue", "purple", "red", "green", "white", "black"};
+  const std::array<std::string, num_colors> color_names = {"blue", "purple", "red"};
 
   const std::string no_color = "none";
 
