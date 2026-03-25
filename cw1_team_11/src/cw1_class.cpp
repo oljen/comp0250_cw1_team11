@@ -367,7 +367,7 @@ void cw1::t2_callback(
   {
     //need to store local coordinate points in the world frame
     coords.push_back(toWorldFrame(getCentroid(*baskets[i])));
-    colors.push_back(colorOfPointCloud(*baskets[i], 0.2));
+    colors.push_back(colorOfPointCloud(*baskets[i], 0.35));
 
     RCLCPP_INFO(node_->get_logger(), "Centroid %zu is %s: x=%.3f y=%.3f z=%.3f", i, colors[i].c_str(), coords[i].x(), coords[i].y(), coords[i].z());
 
@@ -541,7 +541,7 @@ cw1::t3_callback(
   for (size_t i = 0; i < baskets.size(); i++)
   {
     basket_coords.push_back(toWorldFrame(getCentroid(*baskets[i])));
-    basket_colors.push_back(colorOfPointCloud(*baskets[i], 0.2));
+    basket_colors.push_back(colorOfPointCloud(*baskets[i], 0.35));
 
     RCLCPP_INFO(node_->get_logger(), "Basket %zu is %s: x=%.3f y=%.3f z=%.3f", i, basket_colors[i].c_str(), basket_coords[i].x(), basket_coords[i].y(), basket_coords[i].z());
   }
@@ -562,7 +562,7 @@ cw1::t3_callback(
   {
 
     Eigen::Vector3f c = toWorldFrame(getCentroid(*boxes[i]));
-    std::string color = colorOfPointCloud(*boxes[i], 0.2);
+    std::string color = colorOfPointCloud(*boxes[i], 0.35);
 
     //housekeeping
     box_coords.push_back(c);
